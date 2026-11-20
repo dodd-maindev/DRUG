@@ -46,10 +46,11 @@ class BenchmarkPairDataset(Dataset):
         pid, did = self.df.at[idx, "protein"], self.df.at[idx, "drug"]
         p_ent, d_ent = self.proteins[pid], self.drugs[did]
         p_emb = p_ent["emb"].float()
+        ca, valid_ca, rho = p_ent["ca"], p_ent["valid_ca"], p_ent["rho"]
         if self.trim_protein_token and p_emb.shape[0] > 1:
-            p_emb = p_emb[:-1]
+            p_emb, ca, valid_ca, rho = p_emb[:-1], ca[:-1], valid_ca[:-1], rho[:-1]
         return {
-            "protein_emb": p_emb, "ca_coords": p_ent["ca"], "valid_ca": p_ent["valid_ca"], "rho": p_ent["rho"],
+            "protein_emb": p_emb, "ca_coords": ca, "valid_ca": valid_ca, "rho": rho,
             "drug_emb": d_ent["emb"].float(), "drug_coords": d_ent["coords"], "drug_is_h": d_ent["is_h"],
             "rg_feats": d_ent["rg_feats"], "rg": float(d_ent["rg"]),
             "label": int(self.df.at[idx, "label"]), "b_logit": float(self.coarse_logits[idx]),
