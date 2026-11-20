@@ -1,6 +1,6 @@
 """RDKit molecular identifier and Morgan fingerprint similarity utilities."""
 
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from rdkit import Chem, DataStructs
@@ -29,36 +29,42 @@ class MolecularMatcher:
             fingerprint = AllChem.GetMorganFingerprintAsBitVect(molecule, 2, nBits=2048)
         return inchikey_prefix, fingerprint
 
-    @staticmethod
-    def max_tanimoto_similarity(query_fingerprint: object, candidate_fingerprints: list) -> float:
-        """Compute maximum Tanimoto similarity against candidate fingerprints."""
-        best_similarity = 0.0
-        for candidate in candidate_fingerprints:
-            if candidate is not None:
-                similarity = float(DataStructs.TanimotoSimilarity(query_fingerprint, candidate))
-                if similarity > best_similarity:
-                    best_similarity = similarity
-        return best_similarity
-
     @classmethod
-    def count_ligand_matches(
+    def match_positive_pairs(
         cls,
         positive_df: pd.DataFrame,
         protein_ligands: Dict[str, Set[str]],
+        pdb_paths: Dict[str, str],
         ccd_props: Dict[str, Tuple[str, Optional[object]]],
         drug_props: Dict[str, Tuple[str, Optional[object]]],
         tanimoto_threshold: float,
-    ) -> Tuple[int, int]:
-        """Count exact InChIKey-14 and Tanimoto-similar matches over positive pairs."""
+    ) -> Tuple[int, int, List[Dict[str, Any]]]:
+        """Count exact InChIKey-14 and Tanimoto-similar matches and return matched rows."""
         exact_count, similar_count = 0, 0
+        matched_rows: List[Dict[str, Any]] = []
         for drug_id, protein_id in zip(positive_df["drug"], positive_df["protein"]):
             comp_ids = protein_ligands.get(protein_id)
             drug_ik, drug_fp = drug_props.get(drug_id, ("", None))
             if not comp_ids or drug_fp is None:
                 continue
-            cand_props = [ccd_props.get(cid, ("", None)) for cid in comp_ids]
-            if drug_ik and any(c_ik == drug_ik for c_ik, _ in cand_props if c_ik):
+
+            best_sim, best_cid, exact_cid = 0.0, "", ""
+            for cid in sorted(comp_ids):
+                c_ik, c_fp = ccd_props.get(cid, ("", None))
+                if drug_ik and c_ik and drug_ik == c_ik:
+                    exact_cid = cid
+                if c_fp is not None:
+                    sim = float(DataStructs.TanimotoSimilarity(drug_fp, c_fp))
+                    if sim >= best_sim:
+                        best_sim, best_cid = sim, cid
+
+            if exact_cid:
                 exact_count += 1
-            if cls.max_tanimoto_similarity(drug_fp, [fp for _, fp in cand_props]) >= tanimoto_threshold:
+            if best_sim >= tanimoto_threshold:
                 similar_count += 1
-        return exact_count, similar_count
+            if exact_cid or best_sim >= tanimoto_threshold:
+                matched_rows.append({
+                    "drug": drug_id, "protein": protein_id, "pdb_path": pdb_paths.get(protein_id, ""),
+                    "ccd_id": exact_cid or best_cid, "exact_match": bool(exact_cid), "max_tanimoto": round(best_sim, 4),
+                })
+        return exact_count, similar_count, matched_rows

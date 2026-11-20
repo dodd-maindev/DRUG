@@ -9,6 +9,7 @@ from typing import Dict, List, Set, Tuple
 class CifLigandParser:
     """Extracts ligand CCD IDs and SMILES/InChIKey descriptors from mmCIF files."""
 
+    CACHE_VERSION = 2
     IGNORED_CCD_IDS: Set[str] = {
         "HOH", "DOD", "WAT", "SO4", "PO4", "NO3", "CO3", "GOL", "EDO", "PEG", "PGE",
         "MPD", "DMS", "DMSO", "CL", "NA", "MG", "ZN", "CA", "K", "MN", "FE", "FE2",
@@ -45,15 +46,20 @@ class CifLigandParser:
 
     @staticmethod
     def _query_one_ccd(session: object, code: str) -> Tuple[str, Dict[str, str]]:
-        """Query RCSB chemcomp REST endpoint for one CCD ligand code."""
+        """Query RCSB chemcomp REST endpoint handling official mixed-case JSON keys."""
         try:
             resp = session.get(f"https://data.rcsb.org/rest/v1/core/chemcomp/{code}", timeout=5)
             if resp.status_code == 200:
-                chem = (resp.json().get("rcsb_chem_comp_descriptor") or {})
-                return code, {
-                    "smiles": chem.get("smilesstereo") or chem.get("smiles") or "",
-                    "inchikey": chem.get("in_ch_ikey") or "",
-                }
+                payload = resp.json()
+                chem = payload.get("rcsb_chem_comp_descriptor") or {}
+                smiles = chem.get("SMILES_stereo") or chem.get("SMILES") or chem.get("smilesstereo") or chem.get("smiles") or ""
+                inchikey = chem.get("InChIKey") or chem.get("in_ch_ikey") or ""
+                if not smiles:
+                    for item in payload.get("pdbx_chem_comp_descriptor") or []:
+                        if "SMILES" in str(item.get("type", "")).upper() and item.get("descriptor"):
+                            smiles = str(item["descriptor"])
+                            break
+                return code, {"smiles": smiles, "inchikey": inchikey}
         except Exception:
             pass
         return code, {"smiles": "", "inchikey": ""}
@@ -64,13 +70,15 @@ class CifLigandParser:
         import requests
         from requests.adapters import HTTPAdapter
 
-        cache: Dict[str, Dict[str, str]] = {}
+        cache: Dict[str, object] = {}
         if os.path.exists(cache_path):
             with open(cache_path, "r", encoding="utf-8") as handle:
-                cache = json.load(handle)
+                loaded = json.load(handle)
+                if loaded.get("__version__") == cls.CACHE_VERSION:
+                    cache = loaded
 
         missing = [code for code in comp_ids if code not in cache]
-        print(f"[rcsb-ccd] cached={len(cache)}, fetching={len(missing)} (workers={workers})", flush=True)
+        print(f"[rcsb-ccd] cached={max(len(cache) - 1, 0)}, fetching={len(missing)} (workers={workers})", flush=True)
         if missing:
             session = requests.Session()
             session.mount("https://", HTTPAdapter(pool_connections=workers, pool_maxsize=workers))
@@ -80,7 +88,8 @@ class CifLigandParser:
                     if idx % 200 == 0 or idx == len(missing):
                         print(f"  [rcsb-ccd] fetched {idx}/{len(missing)}", flush=True)
 
+        cache["__version__"] = cls.CACHE_VERSION
         os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as handle:
             json.dump(cache, handle, indent=2)
-        return cache
+        return {k: v for k, v in cache.items() if isinstance(v, dict)}

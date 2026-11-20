@@ -58,7 +58,8 @@ class CifLigandMatcher:
         if fetch_rcsb and missing:
             fetched = CifLigandParser.fetch_rcsb_descriptors(missing, os.path.join(output_dir, "ccd_cache.json"))
             for cid, values in fetched.items():
-                descriptors.setdefault(cid, values)
+                if not descriptors.get(cid, {}).get("smiles") and values.get("smiles"):
+                    descriptors[cid] = values
         return pdb_paths, protein_ligands, descriptors, all_comp_ids
 
     @classmethod
@@ -78,13 +79,18 @@ class CifLigandMatcher:
         )
         ccd_props = {c: MolecularMatcher.compute_properties(descriptors[c]["smiles"]) for c in all_cids if descriptors.get(c, {}).get("smiles")}
         drug_props = {d: MolecularMatcher.compute_properties(s) for d, s in SplitSmilesLoader.build_drug_smiles_dict([pos_df]).items()}
-        exact_count, sim_count = MolecularMatcher.count_ligand_matches(pos_df, prot_ligs, ccd_props, drug_props, tanimoto_threshold)
+        exact_count, sim_count, matched_rows = MolecularMatcher.match_positive_pairs(
+            pos_df, prot_ligs, pdb_paths, ccd_props, drug_props, tanimoto_threshold
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        pd.DataFrame(matched_rows).to_csv(os.path.join(output_dir, "pdb_overlap_pairs.csv"), index=False)
 
         result = {
             "total_unique_positive_pairs": len(pos_df),
             "proteins_with_pdb_cif": len(pdb_paths),
             "proteins_with_nonpolymer_ligands": len(prot_ligs),
             "unique_ccd_ligands": len(all_cids),
+            "ccd_with_valid_smiles": sum(1 for _, (_, fp) in ccd_props.items() if fp is not None),
             "exact_inchikey14_matches": exact_count,
             "tanimoto_ge_threshold_matches": sim_count,
             "tanimoto_threshold": tanimoto_threshold,
