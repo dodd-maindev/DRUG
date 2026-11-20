@@ -1,8 +1,9 @@
-"""Non-polymer ligand parser for mmCIF files with optional RCSB CCD lookup."""
+"""Non-polymer ligand parser for mmCIF files with threaded RCSB CCD lookup."""
 
 import json
 import os
-from typing import Dict, List, Optional, Set, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Set, Tuple
 
 
 class CifLigandParser:
@@ -23,13 +24,10 @@ class CifLigandParser:
         doc = gemmi.cif.read_file(cif_path)
         block = doc.sole_block()
         comp_ids: Set[str] = set()
-        for col_name in ("_pdbx_entity_nonpoly.comp_id", "_chem_comp.id"):
-            values = block.find_values(col_name)
-            for raw in values:
-                code = gemmi.cif.as_string(raw).strip().upper()
-                if code and code not in cls.IGNORED_CCD_IDS:
-                    if col_name == "_pdbx_entity_nonpoly.comp_id":
-                        comp_ids.add(code)
+        for raw in block.find_values("_pdbx_entity_nonpoly.comp_id"):
+            code = gemmi.cif.as_string(raw).strip().upper()
+            if code and code not in cls.IGNORED_CCD_IDS:
+                comp_ids.add(code)
 
         descriptors: Dict[str, Dict[str, str]] = {}
         table = block.find("_pdbx_chem_comp_descriptor.", ["comp_id", "type", "descriptor"])
@@ -46,9 +44,25 @@ class CifLigandParser:
         return comp_ids, descriptors
 
     @staticmethod
-    def fetch_rcsb_descriptors(comp_ids: List[str], cache_path: str) -> Dict[str, Dict[str, str]]:
-        """Query RCSB chemcomp REST API for CCD IDs missing inline SMILES."""
+    def _query_one_ccd(session: object, code: str) -> Tuple[str, Dict[str, str]]:
+        """Query RCSB chemcomp REST endpoint for one CCD ligand code."""
+        try:
+            resp = session.get(f"https://data.rcsb.org/rest/v1/core/chemcomp/{code}", timeout=5)
+            if resp.status_code == 200:
+                chem = (resp.json().get("rcsb_chem_comp_descriptor") or {})
+                return code, {
+                    "smiles": chem.get("smilesstereo") or chem.get("smiles") or "",
+                    "inchikey": chem.get("in_ch_ikey") or "",
+                }
+        except Exception:
+            pass
+        return code, {"smiles": "", "inchikey": ""}
+
+    @classmethod
+    def fetch_rcsb_descriptors(cls, comp_ids: List[str], cache_path: str, workers: int = 16) -> Dict[str, Dict[str, str]]:
+        """Concurrently query RCSB chemcomp REST API for CCD IDs missing SMILES."""
         import requests
+        from requests.adapters import HTTPAdapter
 
         cache: Dict[str, Dict[str, str]] = {}
         if os.path.exists(cache_path):
@@ -56,24 +70,17 @@ class CifLigandParser:
                 cache = json.load(handle)
 
         missing = [code for code in comp_ids if code not in cache]
-        for idx, code in enumerate(missing, 1):
-            try:
-                resp = requests.get(f"https://data.rcsb.org/rest/v1/core/chemcomp/{code}", timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    chem = data.get("rcsb_chem_comp_descriptor", {}) or {}
-                    cache[code] = {
-                        "smiles": chem.get("smilesstereo") or chem.get("smiles") or "",
-                        "inchikey": chem.get("in_ch_ikey") or "",
-                    }
-                else:
-                    cache[code] = {"smiles": "", "inchikey": ""}
-            except Exception:
-                cache[code] = {"smiles": "", "inchikey": ""}
-            if idx % 100 == 0:
-                print(f"  [rcsb-ccd] fetched {idx}/{len(missing)}", flush=True)
+        print(f"[rcsb-ccd] cached={len(cache)}, fetching={len(missing)} (workers={workers})", flush=True)
+        if missing:
+            session = requests.Session()
+            session.mount("https://", HTTPAdapter(pool_connections=workers, pool_maxsize=workers))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for idx, (code, entry) in enumerate(executor.map(lambda c: cls._query_one_ccd(session, c), missing), 1):
+                    cache[code] = entry
+                    if idx % 200 == 0 or idx == len(missing):
+                        print(f"  [rcsb-ccd] fetched {idx}/{len(missing)}", flush=True)
 
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as handle:
             json.dump(cache, handle, indent=2)
         return cache

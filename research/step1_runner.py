@@ -3,7 +3,6 @@
 import os
 from typing import Any, Dict, List
 
-import numpy as np
 import pandas as pd
 
 from diagnostics.common import DiagnosticUtilities
@@ -27,24 +26,29 @@ class StepOneAuditRunner:
         protein_npz: str | None,
         drug_npz: str | None,
         trim_protein: bool,
+        include_drug: bool = True,
     ) -> tuple:
         """Load cached .npz pooled vectors or compute missing ones cleanly."""
         proteins = sorted(set(pd.concat([s["protein"] for s in splits.values()])))
-        drugs = sorted(set(pd.concat([s["drug"] for s in splits.values()])))
         prot_store = EmbeddingStore(protein_dir, drug_dir, trim=trim_protein)
-        drug_store = EmbeddingStore(protein_dir, drug_dir, trim=True)
-
         p_cache = protein_npz or os.path.join(out_dir, f"pooled_protein_{'trim' if trim_protein else 'notrim'}.npz")
-        d_cache = drug_npz or os.path.join(out_dir, "pooled_drug_trim.npz")
         pv = PooledFeatureCache.load_or_compute(prot_store, "protein", proteins, p_cache)
-        dv = PooledFeatureCache.load_or_compute(drug_store, "drug", drugs, d_cache)
+        dv: Dict[str, Any] = {}
+        if include_drug:
+            drugs = sorted(set(pd.concat([s["drug"] for s in splits.values()])))
+            drug_store = EmbeddingStore(protein_dir, drug_dir, trim=True)
+            d_cache = drug_npz or os.path.join(out_dir, "pooled_drug_trim.npz")
+            dv = PooledFeatureCache.load_or_compute(drug_store, "drug", drugs, d_cache)
         return pv, dv
 
     @classmethod
     def run_pair_knn(cls, args: Any) -> List[Dict[str, Any]]:
         """Run Pair-kNN lookup baseline on the target train/val/test CSVs."""
+        print("[step1] >>> Running Pair-kNN audit...", flush=True)
         splits = PairDatasetReader().load_splits(args.train_csv, args.val_csv, args.test_csv)
-        pv, _ = cls._load_pooled_entities(splits, args.protein_dir, args.drug_dir, args.out, args.protein_npz, args.drug_npz, args.trim_protein)
+        pv, _ = cls._load_pooled_entities(
+            splits, args.protein_dir, args.drug_dir, args.out, args.protein_npz, args.drug_npz, args.trim_protein, include_drug=False
+        )
         rows = PairKnnAuditor.evaluate(args.train_csv, args.val_csv, args.test_csv, pv, [None, 50, 10])
         print("\n=== Pair-kNN Audit ===", flush=True)
         print(pd.DataFrame(rows).to_string(index=False, float_format=lambda v: f"{v:.4f}"), flush=True)
@@ -54,8 +58,11 @@ class StepOneAuditRunner:
     @classmethod
     def run_c1_coarse(cls, args: Any) -> Dict[str, Any]:
         """Train C1 coarse baseline across seeds and compute CEF."""
+        print("[step1] >>> Running C1 coarse baseline...", flush=True)
         splits = PairDatasetReader().load_splits(args.train_csv, args.val_csv, args.test_csv)
-        pv, dv = cls._load_pooled_entities(splits, args.protein_dir, args.drug_dir, args.out, args.protein_npz, args.drug_npz, args.trim_protein)
+        pv, dv = cls._load_pooled_entities(
+            splits, args.protein_dir, args.drug_dir, args.out, args.protein_npz, args.drug_npz, args.trim_protein, include_drug=True
+        )
         summary = CoarseBaselineTrainer.evaluate(splits, dv, pv, args.ref_auroc, args.out, seeds=args.seeds)
         DiagnosticUtilities.save_json(summary, args.out, "c1_coarse.json")
         return summary
@@ -63,6 +70,7 @@ class StepOneAuditRunner:
     @classmethod
     def run_pdb_overlap(cls, args: Any) -> Dict[str, Any]:
         """Count positive DrugBank pairs matching co-crystallized PDB ligands."""
+        print("[step1] >>> Running PDB co-crystal overlap audit...", flush=True)
         csvs = [p for p in (args.train_csv, args.val_csv, args.test_csv) if p]
         summary = CifLigandMatcher.evaluate(csvs, args.struct_dir, args.out, fetch_rcsb=not args.no_rcsb, tanimoto_threshold=args.tanimoto)
         DiagnosticUtilities.save_json(summary, args.out, "pdb_overlap.json")
