@@ -30,9 +30,9 @@ class LowRankInterfaceHead(nn.Module):
         drop_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Compute pairwise scores s_ia, attention pi_p, null s0, and residual r."""
-        s_ia = torch.bmm(p_nodes, q_nodes.transpose(1, 2)) / self.scale
+        s_ia = torch.bmm(p_nodes.float(), q_nodes.float().transpose(1, 2)) / self.scale
         if self.use_size:
-            size_bias = torch.einsum("bpk,bk->bp", self.c_p(rho), self.c_d(rg_feats)).unsqueeze(-1)
+            size_bias = torch.einsum("bpk,bk->bp", self.c_p(rho.float()), self.c_d(rg_feats.float())).unsqueeze(-1)
             s_ia = s_ia + size_bias
         eff_p_mask = p_mask if drop_mask is None else (p_mask | drop_mask)
         invalid_pair = eff_p_mask.unsqueeze(-1) | d_mask.unsqueeze(1)
@@ -43,7 +43,7 @@ class LowRankInterfaceHead(nn.Module):
         lse = torch.logsumexp(flat_s, dim=-1)
         pi_ia = F.softmax(flat_s, dim=-1).view(bsz, lp, ld)
         pi_p = pi_ia.sum(dim=-1)
-        s0 = self.s0_net(torch.cat([mean_p, mean_d], dim=-1)).squeeze(-1) if self.use_s0 else torch.zeros_like(lse)
+        s0 = self.s0_net(torch.cat([mean_p.float(), mean_d.float()], dim=-1)).squeeze(-1) if self.use_s0 else torch.zeros_like(lse)
         return {"r": lse - s0, "lse": lse, "s0": s0, "pi_p": pi_p, "s_ia": s_masked}
 
 

@@ -31,6 +31,7 @@ class BenchmarkCli:
         parser.add_argument("--track", choices=["A", "B"], default="A")
         parser.add_argument("--epochs", type=int, default=None)
         parser.add_argument("--c1-auroc", type=float, default=None)
+        parser.add_argument("--overwrite", action="store_true")
         return parser
 
     @classmethod
@@ -46,6 +47,7 @@ class BenchmarkCli:
             protein_dir=args.protein_dir, drug_dir=args.drug_dir, ca_dir=args.ca_dir,
             out_dir=args.out_dir, bundle_path=args.bundle_cache, oof_dir=args.oof_dir,
             seeds=args.seeds, track=args.track, epochs=args.epochs, c1_auroc=args.c1_auroc,
+            overwrite=args.overwrite,
         )
 
 

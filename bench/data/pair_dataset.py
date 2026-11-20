@@ -35,6 +35,7 @@ class BenchmarkPairDataset(Dataset):
         d_vocab = {did: idx for idx, did in enumerate(sorted(set(self.df["drug"])))}
         self.protein_indices = np.array([p_vocab[p] for p in self.df["protein"]], dtype=np.int64)
         self.drug_indices = np.array([d_vocab[d] for d in self.df["drug"]], dtype=np.int64)
+        self.protein_lengths = np.array([proteins[p]["emb"].shape[0] for p in self.df["protein"]], dtype=np.int64)
 
     def __len__(self) -> int:
         """Return total valid interaction pairs in the split."""

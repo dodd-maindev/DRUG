@@ -1,4 +1,4 @@
-"""Single-seed training loop with optional EMA, cosine schedule, and checkpointing."""
+"""Single-seed training loop with length bucketing, bfloat16 AMP, and EMA."""
 
 import copy
 from typing import Any, Dict, Optional, Tuple
@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from bench.data.bucketed_sampler import BucketedBatchSampler
 from bench.data.entity_batch_sampler import EntityGroupedBatchSampler
 from bench.data.pair_dataset import BenchmarkBatchCollator, BenchmarkPairDataset
 from bench.losses.delta_criterion import DeltaInterfaceCriterion
@@ -19,31 +20,42 @@ class ArmTrainer:
     """Trains one seed of an experimental arm and returns calibrated predictions."""
 
     @staticmethod
+    def _build_train_loader(cfg: ArmConfig, train_ds: BenchmarkPairDataset, seed: int, device: torch.device) -> DataLoader:
+        """Construct length-bucketed or entity-grouped training DataLoader."""
+        pin = device.type == "cuda"
+        if cfg.use_entity_sampler:
+            sampler = EntityGroupedBatchSampler(
+                train_ds.protein_indices, train_ds.drug_indices, train_ds.df["label"].values,
+                cfg.batch_size, seed, protein_lengths=train_ds.protein_lengths,
+            )
+            return DataLoader(train_ds, batch_sampler=sampler, collate_fn=BenchmarkBatchCollator.collate, pin_memory=pin)
+        sampler = BucketedBatchSampler(train_ds.protein_lengths, batch_size=cfg.batch_size, seed=seed)
+        return DataLoader(train_ds, batch_sampler=sampler, collate_fn=BenchmarkBatchCollator.collate, pin_memory=pin)
+
+    @classmethod
     def train_seed(
-        cfg: ArmConfig, train_ds: BenchmarkPairDataset, val_ds: BenchmarkPairDataset,
+        cls, cfg: ArmConfig, train_ds: BenchmarkPairDataset, val_ds: BenchmarkPairDataset,
         test_ds: BenchmarkPairDataset, coarse_payload: Optional[Dict[str, Any]], seed: int,
     ) -> Tuple[Dict[str, Any], dict]:
-        """Fit one random seed and evaluate best validation checkpoint on test."""
+        """Fit one random seed using bfloat16 AMP on CUDA and select best checkpoint."""
         torch.manual_seed(seed)
         np.random.seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        collate = BenchmarkBatchCollator.collate
+        use_bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
+        if device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
-        if cfg.use_entity_sampler:
-            sampler = EntityGroupedBatchSampler(train_ds.protein_indices, train_ds.drug_indices, train_ds.df["label"].values, cfg.batch_size, seed)
-            tr_loader = DataLoader(train_ds, batch_sampler=sampler, collate_fn=collate, pin_memory=(device.type == "cuda"))
-        else:
-            tr_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False, collate_fn=collate, pin_memory=(device.type == "cuda"))
-        va_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=collate)
-        te_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=collate)
+        tr_loader = cls._build_train_loader(cfg, train_ds, seed, device)
+        va_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=BenchmarkBatchCollator.collate)
+        te_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=BenchmarkBatchCollator.collate)
 
         model = TrainerHelpers.build_model(cfg, coarse_payload, device)
         ema_model = copy.deepcopy(model).eval() if cfg.use_ema else None
         params = [p for p in model.parameters() if p.requires_grad]
         opt_cls = torch.optim.AdamW if cfg.optimizer_type == "adamw" else torch.optim.Adam
         opt = opt_cls(params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-        total_steps = max(1, cfg.epochs * len(tr_loader))
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps, eta_min=1e-6) if cfg.use_cosine else None
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, cfg.epochs * len(tr_loader)), eta_min=1e-6) if cfg.use_cosine else None
         criterion = DeltaInterfaceCriterion(cfg.w_cond, cfg.w_cf, cfg.w_compact, cfg.label_smoothing)
         is_delta = cfg.family == "delta"
 
@@ -52,8 +64,9 @@ class ArmTrainer:
             model.train()
             for raw_batch in tr_loader:
                 batch = TrainerHelpers.move_batch(raw_batch, device)
-                out = model(batch, return_maps=is_delta, use_batch_oof_b=is_delta) if is_delta else model(batch)
-                loss, _ = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"))
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                    out = model(batch, return_maps=is_delta, use_batch_oof_b=is_delta) if is_delta else model(batch)
+                    loss, _ = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"))
                 opt.zero_grad()
                 loss.backward()
                 if cfg.grad_clip > 0:

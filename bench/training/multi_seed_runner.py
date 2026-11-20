@@ -4,13 +4,13 @@ import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import torch
 
 from bench.data.entity_bundle_cache import EntityBundleCache
 from bench.data.pair_dataset import BenchmarkPairDataset
 from bench.data.track_b_builder import TrackBBuilder
 from bench.models.coarse_oof_helper import CoarseOofGenerator
 from bench.training.arm_trainer import ArmTrainer
+from bench.training.model_factory import TrainerHelpers
 from bench.training.train_config import ArmRegistry
 from diagnostics.common import DiagnosticUtilities
 from diagnostics.dataset_reader import PairDatasetReader
@@ -39,6 +39,7 @@ class MultiSeedBenchmarkRunner:
         protein_dir: str, drug_dir: str, ca_dir: Optional[str], out_dir: str,
         bundle_path: Optional[str], oof_dir: str, seeds: List[int],
         track: str = "A", epochs: Optional[int] = None, c1_auroc: Optional[float] = None,
+        overwrite: bool = False,
     ) -> Dict[str, Any]:
         """Train specified seeds on Track A or Track B and save checkpoints + predictions."""
         cfg = ArmRegistry.get(arm_name, epochs_override=epochs)
@@ -50,41 +51,34 @@ class MultiSeedBenchmarkRunner:
             [splits["train"], splits["validation"], splits["test"]], protein_dir, drug_dir, ca_dir, bundle_path
         )
         os.makedirs(out_dir, exist_ok=True)
+        is_delta = cfg.family == "delta"
         seed_metrics, r_aurocs = [], []
 
         for seed in seeds:
-            coarse_payload = None
-            b_train = None
-            if cfg.family == "delta":
-                oof_path = os.path.join(oof_dir, f"oof_c1_track{track.upper()}_seed{seed}.pt")
-                coarse_payload = CoarseOofGenerator.compute_or_load(
-                    splits["train"], splits["validation"], splits["test"], entities, seed, oof_path
-                )
-                b_train = coarse_payload["b_train"]
+            ckpt_path = os.path.join(out_dir, f"ckpt_seed{seed}.pt")
+            pred_path = os.path.join(out_dir, f"preds_seed{seed}.npz")
+            if not overwrite and os.path.exists(ckpt_path) and os.path.exists(pred_path):
+                metrics, r_auc = TrainerHelpers.load_resumed_seed(pred_path, is_delta)
+                seed_metrics.append(metrics)
+                if r_auc is not None:
+                    r_aurocs.append(r_auc)
+                print(f"  [{arm_name} s={seed}] resumed existing checkpoint", flush=True)
+                continue
 
-            tr_ds = BenchmarkPairDataset(splits["train"], entities, cfg.trim_protein_token, b_train)
+            oof_path = os.path.join(oof_dir, f"oof_c1_track{track.upper()}_seed{seed}.pt")
+            coarse = CoarseOofGenerator.compute_or_load(splits["train"], splits["validation"], splits["test"], entities, seed, oof_path) if is_delta else None
+            tr_ds = BenchmarkPairDataset(splits["train"], entities, cfg.trim_protein_token, coarse["b_train"] if coarse else None)
             va_ds = BenchmarkPairDataset(splits["validation"], entities, cfg.trim_protein_token)
             te_ds = BenchmarkPairDataset(splits["test"], entities, cfg.trim_protein_token)
-            result, state = ArmTrainer.train_seed(cfg, tr_ds, va_ds, te_ds, coarse_payload, seed)
+
+            result, state = ArmTrainer.train_seed(cfg, tr_ds, va_ds, te_ds, coarse, seed)
             seed_metrics.append(result["metrics"])
-
-            if cfg.family == "delta":
-                from sklearn.metrics import roc_auc_score
-                r_prob = 1.0 / (1.0 + np.exp(-np.clip(result["test"]["r"], -60.0, 60.0)))
-                r_aurocs.append(float(roc_auc_score(result["test"]["labels"], r_prob)))
-
-            torch.save(state, os.path.join(out_dir, f"ckpt_seed{seed}.pt"))
-            np.savez(
-                os.path.join(out_dir, f"preds_seed{seed}.npz"),
-                protein=te_ds.df["protein"].values, drug=te_ds.df["drug"].values,
-                label=result["test"]["labels"], prob=result["test"]["probs"],
-                logit=result["test"]["logits"], r=result["test"]["r"], b=result["test"]["b"],
-                threshold=result["threshold"],
-            )
+            r_auc = TrainerHelpers.save_seed_artifacts(ckpt_path, pred_path, state, te_ds.df, result, is_delta)
+            if r_auc is not None:
+                r_aurocs.append(r_auc)
 
         summary = cls._aggregate(seed_metrics, r_aurocs, c1_auroc)
-        summary["arm"] = arm_name
-        summary["track"] = track.upper()
+        summary["arm"], summary["track"] = arm_name, track.upper()
         DiagnosticUtilities.save_json(summary, out_dir, "summary.json")
         print(f"[{arm_name} Track {track.upper()}] AUROC={summary['auroc']:.4f}+/-{summary['auroc_std']:.4f} "
               f"MCC={summary['mcc']:.4f}+/-{summary['mcc_std']:.4f}", flush=True)
