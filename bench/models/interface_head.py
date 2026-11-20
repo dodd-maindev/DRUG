@@ -63,5 +63,6 @@ class LowRankInterfaceHead(nn.Module):
             r_scalar = lme - s0
             z_p = torch.bmm(pi_p.unsqueeze(1), pf).squeeze(1)
             z_d = torch.bmm(pi_d.unsqueeze(1), qf).squeeze(1)
-            r_vec = self.inter_mlp(torch.cat([z_p, z_d, z_p * z_d, r_scalar.unsqueeze(-1)], dim=-1)).squeeze(-1)
+            z_contact = (pf * torch.bmm(pi_ia, qf)).sum(dim=1)
+            r_vec = self.inter_mlp(torch.cat([z_p, z_d, z_contact, r_scalar.unsqueeze(-1)], dim=-1)).squeeze(-1)
             return {"r": r_scalar + r_vec, "lse": lme, "s0": s0, "pi_p": pi_p, "s_ia": s_masked}

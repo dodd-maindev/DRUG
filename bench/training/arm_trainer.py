@@ -7,7 +7,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from bench.data.bucketed_sampler import BucketedBatchSampler
 from bench.data.entity_batch_sampler import EntityGroupedBatchSampler
 from bench.data.pair_dataset import BenchmarkBatchCollator, BenchmarkPairDataset
 from bench.losses.delta_criterion import DeltaInterfaceCriterion
@@ -21,16 +20,12 @@ class ArmTrainer:
 
     @staticmethod
     def _build_train_loader(cfg: ArmConfig, train_ds: BenchmarkPairDataset, seed: int, device: torch.device) -> DataLoader:
-        """Construct length-bucketed or entity-grouped training DataLoader."""
+        """Construct entity-partitioned or standard i.i.d. shuffled training DataLoader."""
         pin = device.type == "cuda"
         if cfg.use_entity_sampler:
-            sampler = EntityGroupedBatchSampler(
-                train_ds.protein_indices, train_ds.drug_indices, train_ds.df["label"].values,
-                cfg.batch_size, seed, protein_lengths=train_ds.protein_lengths,
-            )
+            sampler = EntityGroupedBatchSampler(train_ds.protein_indices, train_ds.drug_indices, train_ds.df["label"].values, cfg.batch_size, seed, train_ds.protein_lengths)
             return DataLoader(train_ds, batch_sampler=sampler, collate_fn=BenchmarkBatchCollator.collate, pin_memory=pin)
-        sampler = BucketedBatchSampler(train_ds.protein_lengths, batch_size=cfg.batch_size, seed=seed)
-        return DataLoader(train_ds, batch_sampler=sampler, collate_fn=BenchmarkBatchCollator.collate, pin_memory=pin)
+        return DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, generator=torch.Generator().manual_seed(seed), collate_fn=BenchmarkBatchCollator.collate, pin_memory=pin)
 
     @classmethod
     def train_seed(
