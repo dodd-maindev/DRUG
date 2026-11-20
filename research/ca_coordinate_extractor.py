@@ -41,6 +41,8 @@ class CaCoordinateExtractor:
     ) -> Dict[str, Any]:
         """Extract and validate C-alpha coordinates for every embedded protein."""
         CanonicalResidueRegistry.register()
+        from esm.inverse_folding.util import load_coords  # noqa: F401 - fail fast on ABI/import error
+
         os.makedirs(output_dir, exist_ok=True)
         store = EmbeddingStore(protein_dir, drug_directory=None, trim=False)
         print(f"[ca_coords] indexing structures in {structure_dir}...", flush=True)
@@ -59,33 +61,30 @@ class CaCoordinateExtractor:
             out_path = os.path.join(output_dir, f"{pid}.npz")
             if os.path.exists(out_path):
                 skipped += 1
-                continue
-            if store.resolve_protein_path(pid) is None:
-                continue
-            emb_len = store.load_raw_protein(pid).shape[0]
-            spath = ProteinStructureLocator.find_structure(index, pid)
-            if spath is None:
-                failed += 1
-                continue
-            try:
-                coords, _, chain = CoordinateExtractor.extract_coordinates(spath, explicit_chain=None)
-            except Exception:
-                failed += 1
-                continue
-
-            ca_coords = np.asarray(coords[:, 1, :], dtype=np.float32)
-            valid_mask = ~np.isnan(ca_coords[:, 0])
-            if ca_coords.shape[0] != emb_len:
-                mismatched += 1
-                print(f"[mismatch] {pid}: ca={ca_coords.shape[0]} vs emb={emb_len} ({os.path.basename(spath)})", flush=True)
-                continue
-
-            plddt = cls._extract_plddt(spath, chain, emb_len)
-            payload = {"ca_coords": ca_coords, "valid_mask": valid_mask}
-            if plddt is not None:
-                payload["plddt"] = plddt
-            np.savez_compressed(out_path, **payload)
-            matched += 1
+            elif store.resolve_protein_path(pid) is not None:
+                emb_len = store.load_raw_protein(pid).shape[0]
+                spath = ProteinStructureLocator.find_structure(index, pid)
+                if spath is None:
+                    failed += 1
+                else:
+                    try:
+                        coords, _, chain = CoordinateExtractor.extract_coordinates(spath, explicit_chain=None)
+                        ca_coords = np.asarray(coords[:, 1, :], dtype=np.float32)
+                        valid_mask = ~np.isnan(ca_coords[:, 0])
+                        if ca_coords.shape[0] != emb_len:
+                            mismatched += 1
+                            print(f"[mismatch] {pid}: ca={ca_coords.shape[0]} vs emb={emb_len} ({os.path.basename(spath)})", flush=True)
+                        else:
+                            plddt = cls._extract_plddt(spath, chain, emb_len)
+                            payload = {"ca_coords": ca_coords, "valid_mask": valid_mask}
+                            if plddt is not None:
+                                payload["plddt"] = plddt
+                            np.savez_compressed(out_path, **payload)
+                            matched += 1
+                    except Exception as error:
+                        failed += 1
+                        if failed <= 5:
+                            print(f"[fail] {pid} ({os.path.basename(spath)}): {error}", flush=True)
             if idx in (1, 10, 50) or idx % 100 == 0 or idx == len(protein_ids):
                 print(f"  [ca_coords] {idx}/{len(protein_ids)} matched={matched} failed={failed} mismatched={mismatched}", flush=True)
 
