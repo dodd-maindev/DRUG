@@ -43,6 +43,7 @@ class CaCoordinateExtractor:
         CanonicalResidueRegistry.register()
         os.makedirs(output_dir, exist_ok=True)
         store = EmbeddingStore(protein_dir, drug_directory=None, trim=False)
+        print(f"[ca_coords] indexing structures in {structure_dir}...", flush=True)
         index = ProteinStructureLocator.index_structures(structure_dir)
 
         protein_ids = sorted(
@@ -51,6 +52,7 @@ class CaCoordinateExtractor:
         )
         if limit is not None:
             protein_ids = protein_ids[:limit]
+        print(f"[ca_coords] indexed {len(index)} structure files; processing {len(protein_ids)} proteins", flush=True)
 
         matched, mismatched, failed, skipped = 0, 0, 0, 0
         for idx, pid in enumerate(protein_ids, 1):
@@ -84,8 +86,8 @@ class CaCoordinateExtractor:
                 payload["plddt"] = plddt
             np.savez_compressed(out_path, **payload)
             matched += 1
-            if idx % 500 == 0:
-                print(f"  [ca_coords] {idx}/{len(protein_ids)} matched={matched}", flush=True)
+            if idx in (1, 10, 50) or idx % 100 == 0 or idx == len(protein_ids):
+                print(f"  [ca_coords] {idx}/{len(protein_ids)} matched={matched} failed={failed} mismatched={mismatched}", flush=True)
 
         stats = {"total": len(protein_ids), "matched": matched, "skipped_existing": skipped, "mismatched": mismatched, "failed": failed}
         print("[ca_coords] summary:", stats, flush=True)

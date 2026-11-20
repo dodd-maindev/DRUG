@@ -2,7 +2,7 @@
 
 import glob
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -31,9 +31,9 @@ class CifLigandMatcher:
 
     @classmethod
     def _collect_pdb_ligands(
-        cls, protein_ids: List[str], structure_dir: str, output_dir: str, fetch_rcsb: bool, workers: int = 16
+        cls, protein_ids: List[str], structure_dir: str, output_dir: str, fetch_rcsb: bool, workers: int = 4
     ) -> tuple:
-        """Concurrently scan experimental PDB .cif files and resolve CCD SMILES."""
+        """Concurrently scan experimental PDB .cif files with Drive-safe worker count."""
         import gemmi  # noqa: F401 - fail loudly if gemmi is not installed
 
         unique_proteins = sorted(set(protein_ids))
@@ -43,15 +43,16 @@ class CifLigandMatcher:
         descriptors: Dict[str, Dict[str, str]] = {}
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            iterator = executor.map(lambda pid: cls._parse_protein_cif(pid, structure_dir), unique_proteins)
-            for idx, (pid, path, comp_ids, desc) in enumerate(iterator, 1):
+            futures = [executor.submit(cls._parse_protein_cif, pid, structure_dir) for pid in unique_proteins]
+            for idx, future in enumerate(as_completed(futures), 1):
+                pid, path, comp_ids, desc = future.result()
                 if path:
                     pdb_paths[pid] = path
                 if comp_ids:
                     protein_ligands[pid] = comp_ids
                     descriptors.update(desc)
-                if idx % 500 == 0 or idx == len(unique_proteins):
-                    print(f"  [pdb-overlap] scanned {idx}/{len(unique_proteins)} proteins (pdb={len(pdb_paths)})", flush=True)
+                if idx in (1, 25, 100) or idx % 250 == 0 or idx == len(unique_proteins):
+                    print(f"  [pdb-overlap] scanned {idx}/{len(unique_proteins)} (pdb={len(pdb_paths)})", flush=True)
 
         all_comp_ids = sorted({cid for cids in protein_ligands.values() for cid in cids})
         missing = [cid for cid in all_comp_ids if not descriptors.get(cid, {}).get("smiles")]
@@ -64,12 +65,8 @@ class CifLigandMatcher:
 
     @classmethod
     def evaluate(
-        cls,
-        csv_paths: List[str],
-        structure_dir: str,
-        output_dir: str,
-        fetch_rcsb: bool = True,
-        tanimoto_threshold: float = 0.70,
+        cls, csv_paths: List[str], structure_dir: str, output_dir: str,
+        fetch_rcsb: bool = True, tanimoto_threshold: float = 0.70,
     ) -> Dict[str, Any]:
         """Count positive pairs whose PDB .cif contains an identical or similar ligand."""
         pos_df = pd.concat([SplitSmilesLoader.load_split(p) for p in csv_paths], ignore_index=True)
