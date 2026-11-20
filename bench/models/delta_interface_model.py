@@ -17,9 +17,9 @@ class DeltaInterfaceModel(nn.Module):
     def __init__(self, tau_b: float = 1.0, stop_grad_b: bool = True, use_s0: bool = True, use_size_interaction: bool = True, coarse_state: Optional[dict] = None) -> None:
         """Initialize 3D encoders, interface head, and calibrated coarse branch b."""
         super().__init__()
-        self.prot_enc = ProteinKnnEncoder(dropout=0.25)
-        self.drug_enc = DrugRadiusEncoder(dropout=0.25)
-        self.head = LowRankInterfaceHead(64, use_s0=use_s0, use_size_interaction=use_size_interaction)
+        self.prot_enc = ProteinKnnEncoder(hidden_dim=256, out_dim=256, dropout=0.25)
+        self.drug_enc = DrugRadiusEncoder(hidden_dim=256, out_dim=256, dropout=0.25)
+        self.head = LowRankInterfaceHead(256, 64, use_s0=use_s0, use_size_interaction=use_size_interaction)
         self.stop_grad_b = stop_grad_b
         self.register_buffer("tau_b", torch.tensor(max(float(tau_b), 1e-6), dtype=torch.float32))
         self.b_net = CoarseInteractionNetwork()

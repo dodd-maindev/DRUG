@@ -1,4 +1,4 @@
-"""Counterfactual top-m / random-m perturbation and spatial compactness penalties."""
+"""Vectorized counterfactual perturbation and spatial compactness penalties."""
 
 from typing import Any, Dict, Tuple
 
@@ -11,30 +11,26 @@ class CounterfactualRegularizer:
 
     @staticmethod
     def _sample_masks(pi_p: torch.Tensor, prot_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Construct top-m and disjoint random-m residue deletion masks per pair."""
+        """Vectorized construction of top-m and disjoint random-m residue masks."""
         bsz, lp = pi_p.shape
         device = pi_p.device
-        top_mask = torch.zeros_like(prot_mask)
-        rand_mask = torch.zeros_like(prot_mask)
-        valid_mask = ~prot_mask
+        valid = ~prot_mask
+        n_valid = valid.sum(dim=1)
+        m_per = torch.clamp((0.08 * n_valid.float()).to(torch.long), min=3, max=15)
+        m_per = torch.minimum(m_per, n_valid // 3)
+        max_k = min(15, lp)
+
+        ranks_keep = torch.arange(max_k, device=device).unsqueeze(0) < m_per.unsqueeze(1)
         scores = pi_p.detach().masked_fill(prot_mask, -1e9)
+        _, top_idx = torch.topk(scores, k=max_k, dim=1)
+        top_mask = torch.zeros_like(prot_mask)
+        top_mask.scatter_(1, top_idx, ranks_keep)
 
-        for i in range(bsz):
-            valid_idx = valid_mask[i].nonzero(as_tuple=True)[0]
-            n_valid = int(valid_idx.numel())
-            if n_valid < 4:
-                continue
-            m = min(15, max(3, int(0.08 * n_valid)), n_valid // 3)
-            _, top_local = torch.topk(scores[i, valid_idx], k=m)
-            top_idx = valid_idx[top_local]
-            top_mask[i, top_idx] = True
-
-            rem_mask = valid_mask[i] & (~top_mask[i])
-            rem_idx = rem_mask.nonzero(as_tuple=True)[0]
-            if rem_idx.numel() > 0:
-                k_rand = min(m, int(rem_idx.numel()))
-                perm = torch.randperm(int(rem_idx.numel()), device=device)[:k_rand]
-                rand_mask[i, rem_idx[perm]] = True
+        rand_scores = torch.rand_like(scores).masked_fill(prot_mask | top_mask, -1.0)
+        _, rand_idx = torch.topk(rand_scores, k=max_k, dim=1)
+        rand_mask = torch.zeros_like(prot_mask)
+        rem_valid = (~(prot_mask | top_mask)).gather(1, rand_idx)
+        rand_mask.scatter_(1, rand_idx, ranks_keep & rem_valid)
         return top_mask, rand_mask
 
     @classmethod

@@ -13,7 +13,7 @@ class EntityGroupedBatchSampler(Sampler[List[int]]):
     def __init__(
         self, protein_indices: np.ndarray, drug_indices: np.ndarray, labels: np.ndarray,
         batch_size: int = 64, seed: int = 0, protein_lengths: Optional[np.ndarray] = None,
-        max_tokens: int = 24000,
+        max_tokens: int = 36000,
     ) -> None:
         """Index positive and negative sample lists by protein and drug IDs."""
         super().__init__()

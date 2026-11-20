@@ -13,13 +13,14 @@ from bench.models.geometric_encoders import ProteinKnnEncoder
 class Lego3DModel(nn.Module):
     """Capacity-matched 3D GNN + MIL attention baseline trained purely with BCE."""
 
-    def __init__(self, node_dim: int = 64, dropout: float = 0.2) -> None:
+    def __init__(self, node_dim: int = 256, dropout: float = 0.25) -> None:
         """Initialize matched 3D encoders, bilinear MIL pooling, and MLP classifier."""
         super().__init__()
-        self.prot_enc = ProteinKnnEncoder(out_dim=node_dim, dropout=dropout)
-        self.drug_enc = DrugRadiusEncoder(out_dim=node_dim, dropout=dropout)
-        self.pair_proj = nn.Linear(node_dim, node_dim, bias=False)
-        self.scale = node_dim ** 0.5
+        self.prot_enc = ProteinKnnEncoder(hidden_dim=node_dim, out_dim=node_dim, dropout=dropout)
+        self.drug_enc = DrugRadiusEncoder(hidden_dim=node_dim, out_dim=node_dim, dropout=dropout)
+        self.pair_proj = nn.Linear(node_dim, 64, bias=False)
+        self.q_proj = nn.Linear(node_dim, 64, bias=False)
+        self.scale = 8.0
         self.classifier = nn.Sequential(
             nn.Linear(node_dim * 2 + 1024, 256), nn.ReLU(), nn.Dropout(dropout),
             nn.Linear(256, 128), nn.ReLU(), nn.Dropout(dropout),
@@ -38,7 +39,7 @@ class Lego3DModel(nn.Module):
         p_nodes = self.prot_enc(batch["protein_emb"], batch["ca_coords"], p_mask, batch["valid_ca"])
         q_nodes = self.drug_enc(batch["drug_emb"], batch["drug_coords"], batch["drug_is_h"], d_mask)
 
-        s_ia = torch.bmm(self.pair_proj(p_nodes), q_nodes.transpose(1, 2)) / self.scale
+        s_ia = torch.bmm(self.pair_proj(p_nodes), self.q_proj(q_nodes).transpose(1, 2)) / self.scale
         invalid = p_mask.unsqueeze(-1) | d_mask.unsqueeze(1)
         s_masked = s_ia.masked_fill(invalid, -1e4)
         bsz, lp, ld = s_masked.shape

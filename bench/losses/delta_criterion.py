@@ -1,4 +1,4 @@
-"""Combined training loss criterion (CE, within-entity InfoNCE, CF, compactness)."""
+"""Vectorized combined loss criterion (CE, within-entity InfoNCE, CF, compact)."""
 
 from typing import Any, Dict, Tuple
 
@@ -9,9 +9,9 @@ from bench.losses.counterfactual_ops import CounterfactualRegularizer
 
 
 class DeltaInterfaceCriterion:
-    """Computes label-smoothed CE plus optional conditional and 3D regularizers."""
+    """Computes label-smoothed CE plus vectorized conditional and 3D regularizers."""
 
-    def __init__(self, w_cond: float = 0.5, w_cf: float = 0.25, w_compact: float = 0.05, label_smoothing: float = 0.05, tau_cond: float = 1.0) -> None:
+    def __init__(self, w_cond: float = 0.25, w_cf: float = 0.10, w_compact: float = 0.02, label_smoothing: float = 0.05, tau_cond: float = 1.0) -> None:
         """Store loss weights, smoothing factor, and conditional temperature."""
         self.w_cond = w_cond
         self.w_cf = w_cf
@@ -20,30 +20,29 @@ class DeltaInterfaceCriterion:
         self.tau_cond = tau_cond
 
     def _within_entity_infonce(self, logits: torch.Tensor, entity_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Contrast each positive pair against negative pairs sharing the same entity."""
-        losses = []
-        for eid in torch.unique(entity_ids):
-            mask = entity_ids == eid
-            pos_idx = (mask & (labels == 1)).nonzero(as_tuple=True)[0]
-            neg_idx = (mask & (labels == 0)).nonzero(as_tuple=True)[0]
-            if pos_idx.numel() == 0 or neg_idx.numel() == 0:
-                continue
-            neg_scores = logits[neg_idx]
-            for p_i in pos_idx:
-                group = torch.cat([logits[p_i: p_i + 1], neg_scores], dim=0) / self.tau_cond
-                losses.append(-F.log_softmax(group, dim=0)[0])
-        if not losses:
+        """Vectorized within-entity InfoNCE without Python loops or CPU-GPU sync."""
+        bsz = logits.size(0)
+        same = entity_ids.unsqueeze(1) == entity_ids.unsqueeze(0)
+        is_pos = labels == 1
+        neg_mask = same & (labels == 0).unsqueeze(0)
+        has_group = is_pos & neg_mask.any(dim=1)
+        if not has_group.any():
             return torch.tensor(0.0, device=logits.device)
-        return torch.stack(losses).mean()
+
+        eye = torch.eye(bsz, device=logits.device, dtype=torch.bool)
+        scaled = (logits.float() / self.tau_cond).unsqueeze(0).expand(bsz, bsz)
+        masked = scaled.masked_fill(~(neg_mask | eye), -1e4)
+        losses = torch.logsumexp(masked, dim=1) - (logits.float() / self.tau_cond)
+        return losses[has_group].mean()
 
     def compute(self, model: Any, batch: Dict[str, Any], out: Dict[str, Any], is_delta_model: bool, use_2c_ce: bool = False) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Evaluate total loss and detached scalar component diagnostics."""
         labels = batch["label"]
         if use_2c_ce and "logits_2c" in out:
-            l_ce = F.cross_entropy(out["logits_2c"], labels, label_smoothing=self.label_smoothing)
+            l_ce = F.cross_entropy(out["logits_2c"].float(), labels, label_smoothing=self.label_smoothing)
         else:
             targets = labels.float() * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
-            l_ce = F.binary_cross_entropy_with_logits(out["logit"], targets)
+            l_ce = F.binary_cross_entropy_with_logits(out["logit"].float(), targets)
 
         total = l_ce
         metrics = {"l_ce": float(l_ce.detach())}
