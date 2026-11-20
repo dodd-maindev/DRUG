@@ -67,7 +67,8 @@ class EmbeddingStore:
         """Load the drug embedding tensor applying optional terminal trimming."""
         loaded = torch.load(self.resolve_drug_path(drug_identifier), map_location="cpu", weights_only=False)
         raw_reprs = loaded["atomic_reprs"] if isinstance(loaded, dict) else loaded
-        tensor = torch.as_tensor(raw_reprs).float().reshape(-1, 512)
+        array = np.asarray(raw_reprs, dtype=np.float32).reshape(-1, 512)
+        tensor = torch.from_numpy(array)
         return tensor[:-1] if (self.trim_terminal_token and tensor.shape[0] > 1) else tensor
 
     def compute_coverage(self, splits: Dict[str, pd.DataFrame]) -> List[Dict[str, Any]]:

@@ -27,7 +27,7 @@ class DrugTokenAnalyzer:
     def _inspect_file(cls, file_path: str) -> Dict[str, Any]:
         """Inspect one drug Uni-Mol .pt dictionary."""
         payload = torch.load(file_path, map_location="cpu", weights_only=False)
-        representations = torch.as_tensor(payload["atomic_reprs"]).reshape(-1, 512)
+        representations = np.asarray(payload["atomic_reprs"], dtype=np.float32).reshape(-1, 512)
         symbols = cls._flatten_symbols(payload["atomic_symbol"])
         coordinates = np.asarray(payload["atomic_coords"], dtype=float)
         if coordinates.ndim == 3:

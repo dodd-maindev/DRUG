@@ -79,6 +79,7 @@ class Solver:
         self.id = hash((str(cfg), str(model), self.start_date))
         if self.enable_logging:
             print(f"Training run ID: {self.id}")
+            os.makedirs("logs", exist_ok=True)
             with open(os.path.join("logs", f"training_log_{self.start_date}.csv"), "w") as f:
                 f.write(self.start_date + "\n")
                 f.write(str(self.id) + "\n\n")

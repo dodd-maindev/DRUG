@@ -115,7 +115,8 @@ class MyDataset(Dataset):
                  use_pandas: bool = True,
                  dataset_hint: str = "auto",
                  allow_unimol_suffix: bool | None = None,
-                 trim_terminal_token: bool | None = None):
+                 trim_terminal_token: bool | None = None,
+                 trim_protein_token: bool | None = None):
         """
         RAM-efficient dataset that lazily loads embeddings on demand.
 
@@ -160,6 +161,7 @@ class MyDataset(Dataset):
         self.dataset_kind = infer_dataset_kind(csv_path, self.drug_ids, dataset_hint=dataset_hint)
         self.allow_unimol_suffix = (self.dataset_kind != "kiba") if allow_unimol_suffix is None else bool(allow_unimol_suffix)
         self.trim_terminal_token = (self.dataset_kind != "kiba") if trim_terminal_token is None else bool(trim_terminal_token)
+        self.trim_protein_token = self.trim_terminal_token if trim_protein_token is None else bool(trim_protein_token)
 
         self.protein_paths = build_protein_path_index(self.protein_dir, self.uniprot_ids)
         self.drug_paths = build_drug_path_index(
@@ -189,8 +191,9 @@ class MyDataset(Dataset):
 
         protein_emb = self._get_prot(uniprot_id)  # (L_p, d)
         drug_emb = self._get_drug(drug_id)  # (L_d, d)
-        if self.trim_terminal_token:
+        if self.trim_protein_token:
             protein_emb = protein_emb[:-1, :] if len(protein_emb) > 1 else protein_emb
+        if self.trim_terminal_token:
             drug_emb = drug_emb[:-1, :] if len(drug_emb) > 1 else drug_emb
 
         return {
@@ -274,7 +277,8 @@ class NoisyDataset(MyDataset):
                  use_pandas: bool = True,
                  dataset_hint: str = "auto",
                  allow_unimol_suffix: bool | None = None,
-                 trim_terminal_token: bool | None = None):
+                 trim_terminal_token: bool | None = None,
+                 trim_protein_token: bool | None = None):
         if noise_side not in {"drug", "protein"}:
             raise ValueError(f"noise_side must be 'drug' or 'protein', got {noise_side!r}")
         if noise_side == "drug":
@@ -290,6 +294,7 @@ class NoisyDataset(MyDataset):
             dataset_hint=dataset_hint,
             allow_unimol_suffix=allow_unimol_suffix,
             trim_terminal_token=trim_terminal_token,
+            trim_protein_token=trim_protein_token,
         )
 
         self.noise_side = noise_side
