@@ -62,11 +62,13 @@ class ArmTrainer:
         best_score, best_state = -1.0, {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         for epoch in range(1, cfg.epochs + 1):
             model.train()
+            loss_sum: Dict[str, float] = {}
+            steps = 0
             for raw_batch in tr_loader:
                 batch = TrainerHelpers.move_batch(raw_batch, device)
                 with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
                     out = model(batch, return_maps=is_delta, use_batch_oof_b=is_delta) if is_delta else model(batch)
-                    loss, _ = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"))
+                    loss, lm = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"))
                 opt.zero_grad()
                 loss.backward()
                 if cfg.grad_clip > 0:
@@ -76,6 +78,9 @@ class ArmTrainer:
                     sched.step()
                 if ema_model is not None:
                     TrainerHelpers.update_ema(ema_model, model)
+                for k, v in lm.items():
+                    loss_sum[k] = loss_sum.get(k, 0.0) + v
+                steps += 1
 
             eval_net = ema_model if ema_model is not None else model
             va_out = TrainerHelpers.predict_loader(eval_net, va_loader, device)
@@ -83,8 +88,8 @@ class ArmTrainer:
             if va_score > best_score:
                 best_score = va_score
                 best_state = {k: v.detach().cpu().clone() for k, v in eval_net.state_dict().items()}
-            if epoch == 1 or epoch % 10 == 0 or epoch == cfg.epochs:
-                print(f"  [{cfg.name} s={seed}] ep={epoch:02d}/{cfg.epochs} val_{cfg.select_metric}={va_score:.4f}", flush=True)
+            if epoch == 1 or epoch % 5 == 0 or epoch == cfg.epochs:
+                TrainerHelpers.log_epoch(cfg.name, seed, epoch, cfg.epochs, cfg.select_metric, va_score, va_out, loss_sum, steps, is_delta)
 
         eval_net = ema_model if ema_model is not None else model
         eval_net.load_state_dict({k: v.to(device) for k, v in best_state.items()})

@@ -8,8 +8,8 @@ import torch
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
 
+from bench.models.delta_interface_model import DeltaInterfaceModel
 from bench.models.dice_baselines import Configurable3DiceModel
-from bench.models.interface_head import DeltaInterfaceModel
 from bench.models.lego_coarse_3d import Lego3DModel
 from bench.training.train_config import ArmConfig
 from diagnostics.metrics import MetricEvaluator
@@ -32,7 +32,7 @@ class TrainerHelpers:
         return model.to(device)
 
     @staticmethod
-    def update_ema(ema_model: torch.nn.Module, live_model: torch.nn.Module, decay: float = 0.999) -> None:
+    def update_ema(ema_model: torch.nn.Module, live_model: torch.nn.Module, decay: float = 0.99) -> None:
         """Update exponential moving average shadow weights."""
         with torch.no_grad():
             for ema_p, live_p in zip(ema_model.parameters(), live_model.parameters()):
@@ -87,3 +87,10 @@ class TrainerHelpers:
             r=te["r"], b=te["b"], threshold=result["threshold"],
         )
         return cls.r_only_auroc(te["labels"], te["r"]) if is_delta else None
+
+    @classmethod
+    def log_epoch(cls, name: str, seed: int, epoch: int, epochs: int, metric: str, va_score: float, va_out: Dict[str, np.ndarray], loss_sum: Dict[str, float], steps: int, is_delta: bool) -> None:
+        """Print concise per-epoch validation metric and averaged loss diagnostics."""
+        avg_l = " ".join(f"{k}={v / max(steps, 1):.3f}" for k, v in loss_sum.items())
+        r_msg = f" val_r_auc={cls.r_only_auroc(va_out['labels'], va_out['r']):.4f}" if is_delta else ""
+        print(f"  [{name} s={seed}] ep={epoch:02d}/{epochs} val_{metric}={va_score:.4f}{r_msg} ({avg_l})", flush=True)
