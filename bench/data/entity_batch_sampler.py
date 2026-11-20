@@ -8,15 +8,17 @@ from torch.utils.data import Sampler
 
 
 class EntityGroupedBatchSampler(Sampler[List[int]]):
-    """Samples paired pos/neg entity groups packed into length-similar batches."""
+    """Samples paired pos/neg entity groups packed with dynamic length token budget."""
 
     def __init__(
         self, protein_indices: np.ndarray, drug_indices: np.ndarray, labels: np.ndarray,
         batch_size: int = 64, seed: int = 0, protein_lengths: Optional[np.ndarray] = None,
+        max_tokens: int = 24000,
     ) -> None:
         """Index positive and negative sample lists by protein and drug IDs."""
         super().__init__()
         self.batch_size = batch_size
+        self.max_tokens = max_tokens
         self.seed = seed
         self.epoch = 0
         self.n_samples = len(labels)
@@ -42,7 +44,7 @@ class EntityGroupedBatchSampler(Sampler[List[int]]):
         return [pos_choice] + [int(x) for x in neg_choices]
 
     def __iter__(self) -> Iterator[List[int]]:
-        """Yield shuffled batches packing similar-length entity groups together."""
+        """Yield shuffled batches respecting both batch_size and max padded token budget."""
         rng = np.random.default_rng(self.seed + self.epoch)
         self.epoch += 1
         groups: List[List[int]] = []
@@ -68,13 +70,15 @@ class EntityGroupedBatchSampler(Sampler[List[int]]):
             groups.extend([[i] for i in extra])
 
         groups.sort(key=lambda g: max(self.lengths[i] for i in g) * rng.uniform(0.85, 1.15))
-        batches: List[List[int]] = []
-        cur: List[int] = []
+        batches, cur, cur_max_len = [], [], 0
         for g in groups:
-            if cur and len(cur) + len(g) > self.batch_size:
+            g_max = max(int(self.lengths[i]) for i in g)
+            next_max = max(cur_max_len, g_max)
+            if len(cur) >= 4 and (len(cur) + len(g) > self.batch_size or next_max * (len(cur) + len(g)) > self.max_tokens):
                 batches.append(cur)
-                cur = []
+                cur, cur_max_len = [], 0
             cur.extend(g)
+            cur_max_len = max(cur_max_len, g_max)
         if len(cur) >= 2:
             batches.append(cur)
         rng.shuffle(batches)

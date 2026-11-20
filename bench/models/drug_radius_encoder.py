@@ -22,25 +22,27 @@ class DrugRadiusEncoder(nn.Module):
         self.out_proj = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim))
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor, is_h: torch.Tensor, drug_mask: torch.Tensor) -> torch.Tensor:
-        """Encode 3D molecular atoms within 4.5 Angstrom neighborhoods."""
+        """Encode 3D molecular atoms via O(B*Ld*k) indexed gather without L^2 expansion."""
         active = ~drug_mask
         h = self.in_proj(x + self.h_type_emb(is_h.long())) * active.unsqueeze(-1).float()
-        bsz, ld, _ = h.shape
+        bsz, ld, hdim = h.shape
         k_eff = min(self.max_deg, ld)
 
         with torch.no_grad():
-            dist_mat = torch.cdist(coords, coords)
+            dist_mat = torch.cdist(coords.float(), coords.float())
             in_rad = (dist_mat <= self.radius) & active.unsqueeze(1)
             eye = torch.eye(ld, device=x.device, dtype=torch.bool).unsqueeze(0)
-            dist_masked = dist_mat.masked_fill(~(in_rad | eye), 1e6)
-            _, nbr_idx = torch.topk(dist_masked, k=k_eff, dim=-1, largest=False)
+            _, nbr_idx = torch.topk(dist_mat.masked_fill(~(in_rad | eye), 1e6), k=k_eff, dim=-1, largest=False)
 
-        nbr_coords = torch.gather(coords.unsqueeze(1).expand(bsz, ld, ld, 3), 2, nbr_idx.unsqueeze(-1).expand(bsz, ld, k_eff, 3))
+        offset = (torch.arange(bsz, device=x.device) * ld).view(bsz, 1, 1)
+        flat_idx = nbr_idx + offset
+        nbr_coords = coords.reshape(bsz * ld, 3)[flat_idx]
+        nbr_h = h.reshape(bsz * ld, hdim)[flat_idx]
+        nbr_act = active.reshape(bsz * ld)[flat_idx]
         edge_dist = torch.norm(coords.unsqueeze(2) - nbr_coords, dim=-1)
-        nbr_h = torch.gather(h.unsqueeze(1).expand(bsz, ld, ld, h.size(-1)), 2, nbr_idx.unsqueeze(-1).expand(bsz, ld, k_eff, h.size(-1)))
         edge_in = torch.cat([h.unsqueeze(2).expand_as(nbr_h), nbr_h, self.rbf(edge_dist)], dim=-1)
 
-        nbr_valid = (edge_dist <= self.radius) & torch.gather(active, 1, nbr_idx.view(bsz, -1)).view(bsz, ld, k_eff)
+        nbr_valid = (edge_dist <= self.radius) & nbr_act
         attn = F.softmax(self.gate_net(edge_in).squeeze(-1).masked_fill(~nbr_valid, -1e4), dim=-1).unsqueeze(-1)
         agg = (attn * self.msg_net(edge_in)).sum(dim=2)
         return self.out_proj(h + agg) * active.unsqueeze(-1).float()

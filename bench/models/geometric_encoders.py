@@ -37,27 +37,28 @@ class ProteinKnnEncoder(nn.Module):
         self.out_proj = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim))
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor, prot_mask: torch.Tensor, valid_ca: torch.Tensor, drop_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Encode 3D protein residues excluding padded and counterfactual-dropped nodes."""
+        """Encode 3D protein residues via O(B*Lp*k) indexed gather without L^2 expansion."""
         active = (~prot_mask) if drop_mask is None else ((~prot_mask) & (~drop_mask))
         if drop_mask is not None:
             x = x.masked_fill(drop_mask.unsqueeze(-1), 0.0)
         h = self.in_proj(x) * active.unsqueeze(-1).float()
-        bsz, lp, _ = h.shape
+        bsz, lp, hdim = h.shape
         k_eff = min(self.k, lp)
 
         with torch.no_grad():
-            dist_mat = torch.cdist(coords, coords)
+            dist_mat = torch.cdist(coords.float(), coords.float())
             valid_key = (active & valid_ca).unsqueeze(1).expand(bsz, lp, lp)
             eye = torch.eye(lp, device=x.device, dtype=torch.bool).unsqueeze(0)
-            dist_masked = dist_mat.masked_fill(~(valid_key | eye), 1e6)
-            _, knn_idx = torch.topk(dist_masked, k=k_eff, dim=-1, largest=False)
+            _, knn_idx = torch.topk(dist_mat.masked_fill(~(valid_key | eye), 1e6), k=k_eff, dim=-1, largest=False)
 
-        nbr_coords = torch.gather(coords.unsqueeze(1).expand(bsz, lp, lp, 3), 2, knn_idx.unsqueeze(-1).expand(bsz, lp, k_eff, 3))
+        offset = (torch.arange(bsz, device=x.device) * lp).view(bsz, 1, 1)
+        flat_idx = knn_idx + offset
+        nbr_coords = coords.reshape(bsz * lp, 3)[flat_idx]
+        nbr_h = h.reshape(bsz * lp, hdim)[flat_idx]
+        nbr_active = active.reshape(bsz * lp)[flat_idx]
         edge_dist = torch.norm(coords.unsqueeze(2) - nbr_coords, dim=-1)
-        nbr_h = torch.gather(h.unsqueeze(1).expand(bsz, lp, lp, h.size(-1)), 2, knn_idx.unsqueeze(-1).expand(bsz, lp, k_eff, h.size(-1)))
         edge_in = torch.cat([h.unsqueeze(2).expand_as(nbr_h), nbr_h, self.rbf(edge_dist)], dim=-1)
 
-        nbr_active = torch.gather(active, 1, knn_idx.view(bsz, -1)).view(bsz, lp, k_eff)
         attn = F.softmax(self.gate_net(edge_in).squeeze(-1).masked_fill(~nbr_active, -1e4), dim=-1).unsqueeze(-1)
         agg = (attn * self.msg_net(edge_in)).sum(dim=2)
         return self.out_proj(h + agg) * active.unsqueeze(-1).float()
