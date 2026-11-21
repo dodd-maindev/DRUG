@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from bench.models.delta_interface_model import DeltaInterfaceModel
 from bench.models.dice_baselines import Configurable3DiceModel
+from bench.models.geo_cross_model import GeoCross3DModel
 from bench.models.lego_coarse_3d import Lego3DModel
 from bench.training.train_config import ArmConfig
 from diagnostics.metrics import MetricEvaluator
@@ -25,6 +26,8 @@ class TrainerHelpers:
             model = Configurable3DiceModel(cfg.mask_aware_conv, cfg.prune_dead_fusion)
         elif cfg.family == "lego3d":
             model = Lego3DModel()
+        elif cfg.family == "geocross3d":
+            model = GeoCross3DModel(cfg.use_geo, cfg.cross_layers, cfg.use_ban, cfg.noise_std)
         else:
             tau_b = coarse_payload["tau_b"] if coarse_payload else 1.0
             state = coarse_payload["state_dict"] if coarse_payload else None
@@ -32,11 +35,12 @@ class TrainerHelpers:
         return model.to(device)
 
     @staticmethod
-    def update_ema(ema_model: torch.nn.Module, live_model: torch.nn.Module, decay: float = 0.99) -> None:
-        """Update exponential moving average shadow weights."""
+    def update_ema(ema_model: torch.nn.Module, live_model: torch.nn.Module, decay: float = 0.995, step: Optional[int] = None) -> None:
+        """Update exponential moving average shadow weights with optional warmup ramp."""
+        eff = decay if step is None else min(decay, (1.0 + step) / (10.0 + step))
         with torch.no_grad():
             for ema_p, live_p in zip(ema_model.parameters(), live_model.parameters()):
-                ema_p.data.mul_(decay).add_(live_p.data, alpha=1.0 - decay)
+                ema_p.data.mul_(eff).add_(live_p.data, alpha=1.0 - eff)
 
     @staticmethod
     def move_batch(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:

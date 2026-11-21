@@ -11,6 +11,7 @@ from bench.data.entity_batch_sampler import EntityGroupedBatchSampler
 from bench.data.pair_dataset import BenchmarkBatchCollator, BenchmarkPairDataset
 from bench.losses.delta_criterion import DeltaInterfaceCriterion
 from bench.training.model_factory import TrainerHelpers
+from bench.training.schedule_builder import LrScheduleBuilder
 from bench.training.train_config import ArmConfig
 from diagnostics.metrics import MetricEvaluator
 
@@ -50,11 +51,13 @@ class ArmTrainer:
         params = [p for p in model.parameters() if p.requires_grad]
         opt_cls = torch.optim.AdamW if cfg.optimizer_type == "adamw" else torch.optim.Adam
         opt = opt_cls(params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, cfg.epochs * len(tr_loader)), eta_min=1e-6) if cfg.use_cosine else None
+        sched = LrScheduleBuilder.build(cfg, opt, len(tr_loader))
         criterion = DeltaInterfaceCriterion(cfg.w_cond, cfg.w_cf, cfg.w_compact, cfg.label_smoothing)
-        is_delta = cfg.family == "delta"
+        is_delta, is_geo = cfg.family == "delta", cfg.family == "geocross3d"
+        has_residual = is_delta or is_geo
 
         best_score, best_state = -1.0, {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        global_step = 0
         for epoch in range(1, cfg.epochs + 1):
             model.train()
             loss_sum: Dict[str, float] = {}
@@ -62,8 +65,8 @@ class ArmTrainer:
             for raw_batch in tr_loader:
                 batch = TrainerHelpers.move_batch(raw_batch, device)
                 with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                    out = model(batch, return_maps=is_delta, use_batch_oof_b=is_delta) if is_delta else model(batch)
-                    loss, lm = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"))
+                    out = model(batch, return_maps=has_residual, use_batch_oof_b=is_delta) if has_residual else model(batch)
+                    loss, lm = criterion.compute(model, batch, out, is_delta, use_2c_ce=(cfg.family == "3dice"), is_geocross=is_geo)
                 opt.zero_grad()
                 loss.backward()
                 if cfg.grad_clip > 0:
@@ -72,7 +75,8 @@ class ArmTrainer:
                 if sched is not None:
                     sched.step()
                 if ema_model is not None:
-                    TrainerHelpers.update_ema(ema_model, model)
+                    TrainerHelpers.update_ema(ema_model, model, step=global_step)
+                global_step += 1
                 for k, v in lm.items():
                     loss_sum[k] = loss_sum.get(k, 0.0) + v
                 steps += 1
@@ -84,7 +88,7 @@ class ArmTrainer:
                 best_score = va_score
                 best_state = {k: v.detach().cpu().clone() for k, v in eval_net.state_dict().items()}
             if epoch == 1 or epoch % 5 == 0 or epoch == cfg.epochs:
-                TrainerHelpers.log_epoch(cfg.name, seed, epoch, cfg.epochs, cfg.select_metric, va_score, va_out, loss_sum, steps, is_delta)
+                TrainerHelpers.log_epoch(cfg.name, seed, epoch, cfg.epochs, cfg.select_metric, va_score, va_out, loss_sum, steps, has_residual)
 
         eval_net = ema_model if ema_model is not None else model
         eval_net.load_state_dict({k: v.to(device) for k, v in best_state.items()})

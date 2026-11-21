@@ -5,7 +5,6 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
 import torch
 
 from bench.data.entity_bundle_cache import EntityBundleCache
@@ -14,9 +13,9 @@ from bench.data.track_b_builder import TrackBBuilder
 from bench.evaluation.attention_js_eval import AttentionJsEvaluator
 from bench.evaluation.pocket_auprc_eval import PocketLocalizationEvaluator
 from bench.evaluation.pocket_mask_extractor import PocketMaskExtractor
+from bench.evaluation.report_formatter import ReportFormatter
 from bench.evaluation.within_protein_eval import WithinProteinEvaluator
 from bench.training.train_config import ArmRegistry
-from diagnostics.common import DiagnosticUtilities
 from diagnostics.dataset_reader import PairDatasetReader
 
 
@@ -69,28 +68,12 @@ class HypothesisReporter:
             ha2 = AttentionJsEvaluator.evaluate(cfg, ckpt0, te_ds, coarse0)
             ha3 = PocketLocalizationEvaluator.evaluate(cfg, ckpt0, entities, pocket_masks, coarse0) if pocket_masks else {}
             ha3_te = PocketLocalizationEvaluator.evaluate(cfg, ckpt0, entities, test_pockets, coarse0) if test_pockets else {}
-
-            rows.append({
-                "arm": arm, "auroc": base["auroc"], "auprc": base["auprc"], "mcc": base["mcc"],
-                "r_auroc": base.get("r_only_auroc", float("nan")), "within_auroc": ha1["within_auroc"],
-                "within_r": ha1.get("within_auroc_r_only", float("nan")),
-                "js_div": ha2["js_pos_neg_mean"], "spread_A": ha2["pos_spatial_spread_A"],
-                "leak": ha2["pad_leak_max_abs"], "pocket_auprc": ha3.get("pocket_auprc", float("nan")),
-                "test_pocket_auprc": ha3_te.get("pocket_auprc", float("nan")),
-                "auprc_lift": ha3.get("auprc_lift", float("nan")), "top10_hit": ha3.get("top10_hit", float("nan")),
-            })
+            rows.append(ReportFormatter.build_row(arm, base, ha1, ha2, ha3, ha3_te))
 
         boot = {}
-        if "M1" in within_maps:
-            for ref in ("A2", "C2"):
-                if ref in within_maps:
-                    boot[f"M1_vs_{ref}"] = WithinProteinEvaluator.paired_bootstrap(within_maps["M1"], within_maps[ref])
-
-        report = {"table": rows, "bootstrap_within_auroc": boot}
-        print("\n=== Cross-Arm Hypothesis Matrix (H-A1 .. H-A5) ===", flush=True)
-        if rows:
-            print(pd.DataFrame(rows).to_string(index=False, float_format=lambda v: f"{v:.4f}"), flush=True)
-        if boot:
-            print("\n=== Paired Bootstrap Within-Protein AUROC ===", boot, flush=True)
-        DiagnosticUtilities.save_json(report, out_dir, "hypothesis_report.json")
-        return report
+        for cand in ("G1", "M1"):
+            if cand in within_maps:
+                for ref in ("A0", "A2", "C2", "M1"):
+                    if ref != cand and ref in within_maps:
+                        boot[f"{cand}_vs_{ref}"] = WithinProteinEvaluator.paired_bootstrap(within_maps[cand], within_maps[ref])
+        return ReportFormatter.emit_reports(rows, boot, out_dir)

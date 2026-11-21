@@ -21,6 +21,7 @@ class DrugRadiusEncoder(nn.Module):
         self.msg_net = nn.Sequential(nn.Linear(hidden_dim * 2 + 16, hidden_dim), nn.SiLU(), nn.Dropout(dropout))
         self.gate_net = nn.Linear(hidden_dim * 2 + 16, 1)
         self.out_proj = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim), nn.Dropout(dropout))
+        self.res_scale = nn.Parameter(torch.full((out_dim,), 0.1))
         self.out_norm = nn.LayerNorm(out_dim)
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor, is_h: torch.Tensor, drug_mask: torch.Tensor) -> torch.Tensor:
@@ -49,5 +50,5 @@ class DrugRadiusEncoder(nn.Module):
         attn = F.softmax(self.gate_net(edge_in).squeeze(-1).masked_fill(~nbr_valid, -1e4), dim=-1).unsqueeze(-1)
         out = self.out_proj(h + (attn * self.msg_net(edge_in)).sum(dim=2))
         if self.use_skip:
-            out = self.out_norm(x_in + out)
+            out = self.out_norm(x_in + self.res_scale * out)
         return out * active.unsqueeze(-1).float()

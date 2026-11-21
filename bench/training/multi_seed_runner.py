@@ -23,7 +23,7 @@ class MultiSeedBenchmarkRunner:
     def _aggregate(seed_metrics: List[Dict[str, float]], r_aurocs: List[float], ref_auroc: Optional[float]) -> Dict[str, Any]:
         """Compute mean and standard deviation across random seeds."""
         summary: Dict[str, Any] = {"seeds": len(seed_metrics)}
-        for key in ("auroc", "auprc", "accuracy", "mcc"):
+        for key in ("auroc", "auprc", "accuracy", "ppv", "tpr", "f1", "mcc"):
             vals = [m[key] for m in seed_metrics]
             summary[key] = float(np.mean(vals))
             summary[f"{key}_std"] = float(np.std(vals))
@@ -52,13 +52,14 @@ class MultiSeedBenchmarkRunner:
         )
         os.makedirs(out_dir, exist_ok=True)
         is_delta = cfg.family == "delta"
+        has_residual = cfg.family in ("delta", "geocross3d")
         seed_metrics, r_aurocs = [], []
 
         for seed in seeds:
             ckpt_path = os.path.join(out_dir, f"ckpt_seed{seed}.pt")
             pred_path = os.path.join(out_dir, f"preds_seed{seed}.npz")
             if not overwrite and os.path.exists(ckpt_path) and os.path.exists(pred_path):
-                metrics, r_auc = TrainerHelpers.load_resumed_seed(pred_path, is_delta)
+                metrics, r_auc = TrainerHelpers.load_resumed_seed(pred_path, has_residual)
                 seed_metrics.append(metrics)
                 if r_auc is not None:
                     r_aurocs.append(r_auc)
@@ -73,13 +74,16 @@ class MultiSeedBenchmarkRunner:
 
             result, state = ArmTrainer.train_seed(cfg, tr_ds, va_ds, te_ds, coarse, seed)
             seed_metrics.append(result["metrics"])
-            r_auc = TrainerHelpers.save_seed_artifacts(ckpt_path, pred_path, state, te_ds.df, result, is_delta)
+            r_auc = TrainerHelpers.save_seed_artifacts(ckpt_path, pred_path, state, te_ds.df, result, has_residual)
             if r_auc is not None:
                 r_aurocs.append(r_auc)
 
         summary = cls._aggregate(seed_metrics, r_aurocs, c1_auroc)
         summary["arm"], summary["track"] = arm_name, track.upper()
         DiagnosticUtilities.save_json(summary, out_dir, "summary.json")
-        print(f"[{arm_name} Track {track.upper()}] AUROC={summary['auroc']:.4f}+/-{summary['auroc_std']:.4f} "
-              f"MCC={summary['mcc']:.4f}+/-{summary['mcc_std']:.4f}", flush=True)
+        print(
+            f"[{arm_name} Track {track.upper()}] AUROC={summary['auroc']:.4f} AUPRC={summary['auprc']:.4f} "
+            f"ACC={summary['accuracy']:.4f} F1={summary['f1']:.4f} MCC={summary['mcc']:.4f}",
+            flush=True,
+        )
         return summary

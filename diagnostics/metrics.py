@@ -24,14 +24,20 @@ class MetricEvaluator:
             "positive_rate": float(targets.mean()) if len(targets) else float("nan"),
         }
         if len(set(targets.tolist())) < 2:
-            result.update(auroc=float("nan"), auprc=float("nan"), accuracy=float("nan"), mcc=float("nan"))
+            nan = float("nan")
+            result.update(auroc=nan, auprc=nan, accuracy=nan, mcc=nan, ppv=nan, tpr=nan, f1=nan)
             return result
+        from sklearn.metrics import f1_score, precision_score, recall_score
+
         cutoff = 0.5 if threshold is None else float(threshold)
         predictions = (scores >= cutoff).astype(int)
         result.update(
             auroc=float(roc_auc_score(targets, scores)),
             auprc=float(average_precision_score(targets, scores)),
             accuracy=float((predictions == targets).mean()),
+            ppv=float(precision_score(targets, predictions, zero_division=0.0)),
+            tpr=float(recall_score(targets, predictions, zero_division=0.0)),
+            f1=float(f1_score(targets, predictions, zero_division=0.0)),
             mcc=float(matthews_corrcoef(targets, predictions)),
             threshold=cutoff,
         )

@@ -30,6 +30,11 @@ class ArmConfig:
     w_cond: float = 0.0
     w_cf: float = 0.0
     w_compact: float = 0.0
+    use_geo: bool = True
+    cross_layers: int = 2
+    use_ban: bool = True
+    noise_std: float = 0.05
+    warmup_frac: float = 0.0
 
 
 class ArmRegistry:
@@ -54,6 +59,11 @@ class ArmRegistry:
             "M1_no_compact": ArmConfig("M1_no_compact", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.08, w_compact=0.0),
             "M1_no_stopgrad": ArmConfig("M1_no_stopgrad", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, stop_grad_b=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
             "M1_no_size": ArmConfig("M1_no_size", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, use_size_interaction=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
+            "G1": ArmConfig("G1", "geocross3d", epochs=50, batch_size=32, learning_rate=1e-4, weight_decay=1e-3, use_ema=True, w_cond=0.20, w_cf=0.08, w_compact=0.02, warmup_frac=0.05),
+            "G1_no_geo": ArmConfig("G1_no_geo", "geocross3d", epochs=50, batch_size=32, learning_rate=1e-4, weight_decay=1e-3, use_ema=True, w_cond=0.20, w_cf=0.08, w_compact=0.02, use_geo=False, warmup_frac=0.05),
+            "G1_1layer": ArmConfig("G1_1layer", "geocross3d", epochs=50, batch_size=32, learning_rate=1e-4, weight_decay=1e-3, use_ema=True, w_cond=0.20, w_cf=0.08, w_compact=0.02, cross_layers=1, warmup_frac=0.05),
+            "G1_no_ban": ArmConfig("G1_no_ban", "geocross3d", epochs=50, batch_size=32, learning_rate=1e-4, weight_decay=1e-3, use_ema=True, w_cond=0.20, w_cf=0.08, w_compact=0.02, use_ban=False, warmup_frac=0.05),
+            "G1_no_noise": ArmConfig("G1_no_noise", "geocross3d", epochs=50, batch_size=32, learning_rate=1e-4, weight_decay=1e-3, use_ema=True, w_cond=0.20, w_cf=0.08, w_compact=0.02, noise_std=0.0, warmup_frac=0.05),
         }
 
     @classmethod

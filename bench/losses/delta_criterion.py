@@ -34,35 +34,46 @@ class DeltaInterfaceCriterion:
         losses = torch.logsumexp(masked, dim=1) - (logits.float() / self.tau_cond)
         return losses[has_group].mean()
 
-    def compute(self, model: Any, batch: Dict[str, Any], out: Dict[str, Any], is_delta_model: bool, use_2c_ce: bool = False) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def compute(
+        self,
+        model: Any,
+        batch: Dict[str, Any],
+        out: Dict[str, Any],
+        is_delta_model: bool,
+        use_2c_ce: bool = False,
+        is_geocross: bool = False,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Evaluate total loss and detached scalar component diagnostics."""
         labels = batch["label"]
+        targets = labels.float() * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         if use_2c_ce and "logits_2c" in out:
             l_ce = F.cross_entropy(out["logits_2c"].float(), labels, label_smoothing=self.label_smoothing)
         else:
-            targets = labels.float() * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
             l_ce = F.binary_cross_entropy_with_logits(out["logit"].float(), targets)
 
         total = l_ce
         metrics = {"l_ce": float(l_ce.detach())}
-        if not is_delta_model:
+        if not (is_delta_model or is_geocross):
             return total, metrics
 
-        targets = labels.float() * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         l_iface = F.binary_cross_entropy_with_logits(out["r"].float(), targets)
-        total = total + 0.5 * l_iface
+        total = total + (1.0 if is_geocross else 0.5) * l_iface
         metrics["l_if"] = float(l_iface.detach())
 
         if self.w_cond > 0:
-            lp_m = self._within_entity_infonce(out["logit"], batch["protein_idx"], labels)
             lp_r = self._within_entity_infonce(out["r"], batch["protein_idx"], labels)
-            ld_m = self._within_entity_infonce(out["logit"], batch["drug_idx"], labels)
-            l_cond = 0.5 * (lp_m + lp_r) + 0.5 * ld_m
+            ld_r = self._within_entity_infonce(out["r"], batch["drug_idx"], labels)
+            if is_geocross:
+                l_cond = 0.5 * (lp_r + ld_r)
+            else:
+                lp_m = self._within_entity_infonce(out["logit"], batch["protein_idx"], labels)
+                ld_m = self._within_entity_infonce(out["logit"], batch["drug_idx"], labels)
+                l_cond = 0.5 * (lp_m + lp_r) + 0.5 * ld_m
             total = total + self.w_cond * l_cond
             metrics["l_cond"] = float(l_cond.detach())
 
         if self.w_cf > 0:
-            l_nec, l_spec = CounterfactualRegularizer.counterfactual_losses(model, batch, out)
+            l_nec, l_spec = CounterfactualRegularizer.counterfactual_losses(model, batch, out, max_pairs=4 if is_geocross else 12)
             total = total + self.w_cf * (l_nec + l_spec)
             metrics["l_nec"] = float(l_nec.detach())
             metrics["l_spec"] = float(l_spec.detach())
