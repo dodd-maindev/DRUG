@@ -24,24 +24,25 @@ class GaussianRbfEncoder(nn.Module):
 
 
 class ProteinKnnEncoder(nn.Module):
-    """One-layer k=12 3D C-alpha kNN message-passing encoder (~150K params)."""
+    """One-layer k=12 3D C-alpha kNN message-passing encoder with residual skip."""
 
-    def __init__(self, in_dim: int = 512, hidden_dim: int = 128, out_dim: int = 64, k: int = 12, dropout: float = 0.1) -> None:
+    def __init__(self, in_dim: int = 512, hidden_dim: int = 256, out_dim: int = 512, k: int = 12, dropout: float = 0.3) -> None:
         """Initialize node projection, RBF distance basis, gated edge MLP, and output proj."""
         super().__init__()
         self.k = k
+        self.use_skip = (in_dim == out_dim)
         self.in_proj = nn.Sequential(nn.Linear(in_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU())
         self.rbf = GaussianRbfEncoder(16, max_dist=20.0)
         self.msg_net = nn.Sequential(nn.Linear(hidden_dim * 2 + 16, hidden_dim), nn.SiLU(), nn.Dropout(dropout))
         self.gate_net = nn.Linear(hidden_dim * 2 + 16, 1)
-        self.out_proj = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim))
+        self.out_proj = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim), nn.Dropout(dropout))
+        self.out_norm = nn.LayerNorm(out_dim)
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor, prot_mask: torch.Tensor, valid_ca: torch.Tensor, drop_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Encode 3D protein residues via O(B*Lp*k) indexed gather without L^2 expansion."""
         active = (~prot_mask) if drop_mask is None else ((~prot_mask) & (~drop_mask))
-        if drop_mask is not None:
-            x = x.masked_fill(drop_mask.unsqueeze(-1), 0.0)
-        h = self.in_proj(x) * active.unsqueeze(-1).float()
+        x_clean = x.masked_fill(drop_mask.unsqueeze(-1), 0.0) if drop_mask is not None else x
+        h = self.in_proj(x_clean) * active.unsqueeze(-1).float()
         bsz, lp, hdim = h.shape
         k_eff = min(self.k, lp)
 
@@ -60,5 +61,7 @@ class ProteinKnnEncoder(nn.Module):
         edge_in = torch.cat([h.unsqueeze(2).expand_as(nbr_h), nbr_h, self.rbf(edge_dist)], dim=-1)
 
         attn = F.softmax(self.gate_net(edge_in).squeeze(-1).masked_fill(~nbr_active, -1e4), dim=-1).unsqueeze(-1)
-        agg = (attn * self.msg_net(edge_in)).sum(dim=2)
-        return self.out_proj(h + agg) * active.unsqueeze(-1).float()
+        out = self.out_proj(h + (attn * self.msg_net(edge_in)).sum(dim=2))
+        if self.use_skip:
+            out = self.out_norm(x_clean + out)
+        return out * active.unsqueeze(-1).float()

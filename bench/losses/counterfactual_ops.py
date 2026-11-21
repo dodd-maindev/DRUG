@@ -36,7 +36,7 @@ class CounterfactualRegularizer:
     @classmethod
     def counterfactual_losses(
         cls, model: Any, batch: Dict[str, Any], out: Dict[str, Any],
-        max_pairs: int = 12, margin_nec: float = 0.5, delta_spec: float = 0.15,
+        max_pairs: int = 8, margin_nec: float = 0.5, delta_spec: float = 0.15,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Re-run protein kNN under top-m and non-pocket deletion on y=1 pairs."""
         pos_idx = (batch["label"] == 1).nonzero(as_tuple=True)[0]
