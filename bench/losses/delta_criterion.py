@@ -1,4 +1,4 @@
-"""Vectorized combined loss criterion (CE, within-entity InfoNCE, CF, compact)."""
+"""Vectorized dual-supervision loss criterion (main CE, iface CE, InfoNCE, CF, compact)."""
 
 from typing import Any, Dict, Tuple
 
@@ -9,9 +9,9 @@ from bench.losses.counterfactual_ops import CounterfactualRegularizer
 
 
 class DeltaInterfaceCriterion:
-    """Computes label-smoothed CE plus vectorized conditional and 3D regularizers."""
+    """Supervises combined logit and un-starved 3D pocket residual jointly."""
 
-    def __init__(self, w_cond: float = 0.25, w_cf: float = 0.10, w_compact: float = 0.02, label_smoothing: float = 0.05, tau_cond: float = 1.0) -> None:
+    def __init__(self, w_cond: float = 0.20, w_cf: float = 0.08, w_compact: float = 0.02, label_smoothing: float = 0.0, tau_cond: float = 1.0) -> None:
         """Store loss weights, smoothing factor, and conditional temperature."""
         self.w_cond = w_cond
         self.w_cf = w_cf
@@ -23,9 +23,8 @@ class DeltaInterfaceCriterion:
         """Vectorized within-entity InfoNCE without Python loops or CPU-GPU sync."""
         bsz = logits.size(0)
         same = entity_ids.unsqueeze(1) == entity_ids.unsqueeze(0)
-        is_pos = labels == 1
         neg_mask = same & (labels == 0).unsqueeze(0)
-        has_group = is_pos & neg_mask.any(dim=1)
+        has_group = (labels == 1) & neg_mask.any(dim=1)
         if not has_group.any():
             return torch.tensor(0.0, device=logits.device)
 
@@ -49,10 +48,16 @@ class DeltaInterfaceCriterion:
         if not is_delta_model:
             return total, metrics
 
+        targets = labels.float() * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
+        l_iface = F.binary_cross_entropy_with_logits(out["r"].float(), targets)
+        total = total + 0.5 * l_iface
+        metrics["l_if"] = float(l_iface.detach())
+
         if self.w_cond > 0:
-            l_prot = self._within_entity_infonce(out["logit"], batch["protein_idx"], labels)
-            l_drug = self._within_entity_infonce(out["logit"], batch["drug_idx"], labels)
-            l_cond = 0.5 * (l_prot + l_drug) if (l_prot > 0 and l_drug > 0) else (l_prot + l_drug)
+            lp_m = self._within_entity_infonce(out["logit"], batch["protein_idx"], labels)
+            lp_r = self._within_entity_infonce(out["r"], batch["protein_idx"], labels)
+            ld_m = self._within_entity_infonce(out["logit"], batch["drug_idx"], labels)
+            l_cond = 0.5 * (lp_m + lp_r) + 0.5 * ld_m
             total = total + self.w_cond * l_cond
             metrics["l_cond"] = float(l_cond.detach())
 

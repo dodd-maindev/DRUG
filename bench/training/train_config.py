@@ -47,13 +47,13 @@ class ArmRegistry:
                             use_cosine=False, use_ema=False, grad_clip=0.0, label_smoothing=0.0, select_metric="accuracy"),
             "A2": ArmConfig("A2", "3dice", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4),
             "C2": ArmConfig("C2", "lego3d", epochs=35, batch_size=32, learning_rate=8e-5, weight_decay=1e-4),
-            "M1": ArmConfig("M1", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.08, w_compact=0.02),
-            "M1_no_s0": ArmConfig("M1_no_s0", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, use_s0=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
-            "M1_no_cond": ArmConfig("M1_no_cond", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=False, w_cond=0.0, w_cf=0.08, w_compact=0.02),
-            "M1_no_cf": ArmConfig("M1_no_cf", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.0, w_compact=0.02),
-            "M1_no_compact": ArmConfig("M1_no_compact", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.08, w_compact=0.0),
-            "M1_no_stopgrad": ArmConfig("M1_no_stopgrad", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, stop_grad_b=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
-            "M1_no_size": ArmConfig("M1_no_size", "delta", epochs=40, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, use_size_interaction=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
+            "M1": ArmConfig("M1", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.08, w_compact=0.02),
+            "M1_no_s0": ArmConfig("M1_no_s0", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, use_s0=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
+            "M1_no_cond": ArmConfig("M1_no_cond", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=False, w_cond=0.0, w_cf=0.08, w_compact=0.02),
+            "M1_no_cf": ArmConfig("M1_no_cf", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.0, w_compact=0.02),
+            "M1_no_compact": ArmConfig("M1_no_compact", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, w_cond=0.20, w_cf=0.08, w_compact=0.0),
+            "M1_no_stopgrad": ArmConfig("M1_no_stopgrad", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, stop_grad_b=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
+            "M1_no_size": ArmConfig("M1_no_size", "delta", epochs=45, batch_size=32, learning_rate=6e-5, weight_decay=1e-4, use_entity_sampler=True, use_size_interaction=False, w_cond=0.20, w_cf=0.08, w_compact=0.02),
         }
 
     @classmethod

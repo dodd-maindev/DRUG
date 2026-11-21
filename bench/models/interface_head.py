@@ -1,4 +1,4 @@
-"""Normalized low-rank interface head with 3D pocket readout and null hypothesis s0."""
+"""Normalized low-rank interface head producing 3D pocket attention and residual r."""
 
 from typing import Dict, Optional
 
@@ -8,10 +8,10 @@ import torch.nn.functional as F
 
 
 class LowRankInterfaceHead(nn.Module):
-    """Separates 3D pocket attention pi_ia from cross-attended interface readout."""
+    """Computes local 3D pocket attention pi_ia, null diff, and pocket residual r."""
 
     def __init__(self, node_dim: int = 512, attn_dim: int = 64, use_s0: bool = True, use_size_interaction: bool = True) -> None:
-        """Initialize attention keys, size affinity, null MLP, and interaction MLP."""
+        """Initialize attention keys, size affinity, null MLP, and pocket readout MLP."""
         super().__init__()
         self.use_s0 = use_s0
         self.use_size = use_size_interaction
@@ -24,14 +24,12 @@ class LowRankInterfaceHead(nn.Module):
         self.s0_net = nn.Sequential(nn.Linear(1024, 128), nn.SiLU(), nn.Dropout(0.3), nn.Linear(128, 1))
         self.inter_mlp = nn.Sequential(
             nn.LayerNorm(node_dim * 3 + 1),
-            nn.Linear(node_dim * 3 + 1, 512), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(512, 256), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(256, 1),
+            nn.Linear(node_dim * 3 + 1, 256), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(256, 128), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(128, 1),
         )
         nn.init.zeros_(self.s0_net[-1].weight)
         nn.init.zeros_(self.s0_net[-1].bias)
-        nn.init.zeros_(self.inter_mlp[-1].weight)
-        nn.init.zeros_(self.inter_mlp[-1].bias)
 
     def compute_attention(
         self, p_geo: torch.Tensor, q_geo: torch.Tensor, rho: torch.Tensor, rg_feats: torch.Tensor,
@@ -60,10 +58,10 @@ class LowRankInterfaceHead(nn.Module):
             s0 = self.s0_net(torch.cat([mean_p.float(), mean_d.float()], dim=-1)).squeeze(-1) if self.use_s0 else torch.zeros_like(lme)
             return {"pi_ia": pi_ia, "pi_p": pi_ia.sum(dim=-1), "pi_d": pi_ia.sum(dim=1), "lme": lme, "s0": s0, "r_scalar": lme - s0}
 
-    def readout(self, p_cross: torch.Tensor, q_cross: torch.Tensor, attn: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Pool cross-attended pocket representations using 3D attention pi_ia."""
+    def readout_interface(self, p_geo: torch.Tensor, q_geo: torch.Tensor, attn: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Compute local 3D pocket residual score from 3D nodes and interface map."""
         with torch.amp.autocast("cuda", enabled=False):
-            pf, qf = p_cross.float(), q_cross.float()
+            pf, qf = p_geo.float(), q_geo.float()
             z_p = torch.bmm(attn["pi_p"].unsqueeze(1), pf).squeeze(1)
             z_d = torch.bmm(attn["pi_d"].unsqueeze(1), qf).squeeze(1)
             z_contact = (pf * torch.bmm(attn["pi_ia"], qf)).sum(dim=1)
