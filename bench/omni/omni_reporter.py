@@ -43,9 +43,9 @@ class OmniReporter:
 
     @classmethod
     def _ref_fmt_row(cls, split: str, ref: Dict[str, Any]) -> List[str]:
-        """Format one literature reference entry with zero delta vs 3DICE."""
+        """Format one literature reference entry matching table header column count."""
         cells = [f"{ref[k][0]:.4f} ({ref[k][1]:.4f})" for k in cls.KEYS]
-        return [split, ref["arm"], *cells, "-", "-"]
+        return [split, ref["arm"], *cells, "-"]
 
     @classmethod
     def build_markdown_tables(cls, rows: List[Dict[str, Any]], splits: List[str]) -> str:
@@ -55,8 +55,7 @@ class OmniReporter:
         lines = ["## Table 1: Paper Comparison (mean (std))", "", hdr, sep]
         for sp in splits:
             for ref in cls.PAPER_REFS.get(sp, []):
-                r_cells = cls._ref_fmt_row(sp, ref)
-                lines.append(f"| {' | '.join(r_cells[:-1])} | - |")
+                lines.append(f"| {' | '.join(cls._ref_fmt_row(sp, ref))} |")
             for r in [x for x in rows if x["split"] == sp and x["arm"] == "Omni3D_DTI"]:
                 c = [r[f"{k}_fmt"] for k in cls.KEYS]
                 lines.append(f"| {sp} | **Omni3D_DTI** | {' | '.join(c)} | {r['gate_p']:.2f} / {r['gate_d']:.2f} |")
