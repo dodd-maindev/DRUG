@@ -1,0 +1,29 @@
+{
+  "batch_size": 32,
+  "results": [
+    {
+      "model": "3DICE",
+      "params_m": 12.866562,
+      "peak_mem_mb": 1851.125,
+      "forward_ms": 1.0674692293741828,
+      "epoch_s": 61.36069323400079,
+      "gpu": "NVIDIA L4"
+    },
+    {
+      "model": "Omni3D_DTI",
+      "params_m": 5.625473,
+      "peak_mem_mb": 127.49267578125,
+      "forward_ms": 0.0584689987499587,
+      "epoch_s": 9.596490770996752,
+      "gpu": "NVIDIA L4"
+    },
+    {
+      "model": "Omni3D_wo_Gate",
+      "params_m": 4.887041,
+      "peak_mem_mb": 113.1259765625,
+      "forward_ms": 0.04848699250032951,
+      "epoch_s": 8.57435507399714,
+      "gpu": "NVIDIA L4"
+    }
+  ]
+}

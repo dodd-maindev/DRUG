@@ -36,13 +36,18 @@ class ComplexityTableRenderer:
 
     @staticmethod
     def _footnote(payload: Optional[Dict[str, Any]]) -> str:
-        """Build accurate hardware footnote distinguishing paper RTX 5090 vs measured GPU."""
+        """Build two-line hardware footnote comparing Omni3D-DTI against same-GPU 3DICE."""
         recs = {r["model"]: r for r in payload.get("results", [])} if payload else {}
         ours, dice_gpu = recs.get("Omni3D_DTI"), recs.get("3DICE")
         if ours and dice_gpu:
-            return (f"Rows 1–4 from paper (RTX 5090, BS=32). Row 5 measured on {ours['gpu']} (BS=32); "
-                    f"on same {dice_gpu['gpu']}, 3DICE uses {dice_gpu['peak_mem_mb']:.0f} MB, "
-                    f"{dice_gpu['forward_ms']:.3f} ms/sample, {dice_gpu['epoch_s']:.2f} s/epoch.")
+            mem_x = dice_gpu["peak_mem_mb"] / max(ours["peak_mem_mb"], 1e-6)
+            fwd_x = dice_gpu["forward_ms"] / max(ours["forward_ms"], 1e-6)
+            ep_x = dice_gpu["epoch_s"] / max(ours["epoch_s"], 1e-6)
+            return (
+                f"Rows 1–4 report paper numbers (RTX 5090, BS=32). Row 5 measured on {ours['gpu']} (BS=32).\n"
+                f"On the same {dice_gpu['gpu']}, 3DICE uses {dice_gpu['peak_mem_mb']:.0f} MB, {dice_gpu['forward_ms']:.3f} ms, {dice_gpu['epoch_s']:.2f} s/ep "
+                f"(Omni3D-DTI: {mem_x:.1f}x less VRAM, {fwd_x:.1f}x faster fwd, {ep_x:.1f}x faster/ep)."
+            )
         return "Rows 1–4 performed on RTX 5090 (BS=32). Row 5 reports exact trainable parameters; run profile_complexity.py on GPU for memory/timing."
 
     @classmethod
@@ -52,11 +57,11 @@ class ComplexityTableRenderer:
         minima = [min(r["vals"][c] for r in rows if not math.isnan(r["vals"][c])) for c in range(4)]
 
         plt.rcParams["font.family"] = "DejaVu Sans"
-        fig, ax = plt.subplots(figsize=(9.2, 4.1), dpi=300)
+        fig, ax = plt.subplots(figsize=(9.2, 4.35), dpi=300)
         fig.patch.set_facecolor("#FFFFFF")
         ax.set_facecolor("#FFFFFF")
         ax.set_xlim(0.0, 1.0)
-        ax.set_ylim(-0.35, 7.8)
+        ax.set_ylim(-0.75, 7.8)
         ax.axis("off")
 
         ax.text(0.010, 7.40, "Table 2  ", fontsize=10.5, fontweight="bold", va="center", color="#111111")
@@ -85,7 +90,7 @@ class ComplexityTableRenderer:
 
         y_bot = cur_y + 0.44
         ax.plot([0.005, 0.995], [y_bot, y_bot], color="#111111", lw=1.35)
-        ax.text(0.010, y_bot - 0.25, cls._footnote(complexity_payload), fontsize=7.8, color="#475569", ha="left", va="top")
+        ax.text(0.010, y_bot - 0.22, cls._footnote(complexity_payload), fontsize=7.8, color="#475569", ha="left", va="top", linespacing=1.35)
 
         plt.tight_layout(pad=0.25)
         fig.savefig(out_path, dpi=300, bbox_inches="tight", facecolor="#FFFFFF")
