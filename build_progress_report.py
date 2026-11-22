@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI builder generating draw.io diagram, 300-DPI figure, and DOCX progress report."""
+"""CLI builder generating draw.io tabs, split 300-DPI diagrams, and DOCX report."""
 
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ from bench.omni.drawio_builder import DrawioArchitectureBuilder
 
 
 class ProgressReportCli:
-    """Generates draw.io architecture tabs, comparison figure, and Word report."""
+    """Generates draw.io tabs, standalone Figure 1 & Figure 2, and Word report."""
 
     @staticmethod
     def main() -> None:
-        """Parse paths and emit .drawio, architecture PNG, and .docx deliverable."""
+        """Parse paths and emit .drawio, split PNG diagrams, and .docx deliverable."""
         ap = argparse.ArgumentParser(description="Build 3DICE vs Omni3D-DTI diagrams and DOCX report.")
         ap.add_argument("--md", default="Bao_cao_Tien_do_3DICE.md")
         ap.add_argument("--docx", default="Bao_cao_Tien_do_3DICE.docx")
@@ -31,13 +31,15 @@ class ProgressReportCli:
 
         os.makedirs(args.figures_dir, exist_ok=True)
         drawio_path = os.path.join(args.figures_dir, "3DICE_vs_Omni3D_DTI.drawio")
-        arch_png = os.path.join(args.figures_dir, "architecture_comparison.png")
+        base_png = os.path.join(args.figures_dir, "arch_3dice_base.png")
+        omni_png = os.path.join(args.figures_dir, "arch_omni3d_dti.png")
 
         DrawioArchitectureBuilder.write(drawio_path)
-        ArchitectureDiagramPlotter.render(arch_png)
+        ArchitectureDiagramPlotter.render_base_3dice(base_png)
+        ArchitectureDiagramPlotter.render_omni3d_dti(omni_png)
         if os.path.exists(args.md):
             MarkdownToDocxBuilder.build(args.md, args.docx, base_dir=str(ROOT))
-        print(f"[built] {drawio_path}, {arch_png}, {args.docx}", flush=True)
+        print(f"[built] {drawio_path}, {base_png}, {omni_png}, {args.docx}", flush=True)
 
 
 if __name__ == "__main__":
